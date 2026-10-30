@@ -10,7 +10,14 @@ from gateway.routing.agent_client import DuplicateRequestIdError
 from gateway.routing.e2a_proxy import fetch_agent_unary
 
 
-def register_lifecycle_handlers(channel, resolve_client, resolve_cron, on_session_deleted=None):
+def register_lifecycle_handlers(
+    channel,
+    resolve_client,
+    resolve_cron,
+    on_session_deleted=None,
+    *,
+    register_method=None,
+):
     watchers = {}
 
     async def call(method, params, session_id, user_id):
@@ -233,4 +240,7 @@ def register_lifecycle_handlers(channel, resolve_client, resolve_cron, on_sessio
         "project.sessions.archive",
         "project.sessions.delete_archived",
     ):
-        channel.register_method(method, handler(method))
+        if register_method is None:
+            channel.register_method(method, handler(method))
+        else:
+            register_method(method, handler(method))
