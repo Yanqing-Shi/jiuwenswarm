@@ -136,7 +136,6 @@ def register_lifecycle_handlers(
 
     def handler(method):
         async def handle(ws, req_id, params, session_id, user_id=None):
-            ensure_watch(user_id)
             if not isinstance(params, dict):
                 await channel.send_response(
                     ws,
@@ -146,6 +145,27 @@ def register_lifecycle_handlers(
                     code="BAD_REQUEST",
                 )
                 return
+            if method in {"session.archive", "session.unarchive", "session.delete"}:
+                ids = params.get("session_ids")
+                single = params.get("session_id") if method == "session.delete" else None
+                if "session_ids" in params and (
+                    not isinstance(ids, list) or not 1 <= len(ids) <= 100
+                ):
+                    error = "session_ids must contain 1 to 100 IDs"
+                elif method == "session.delete" and "session_id" in params and (
+                    not isinstance(single, str) or not single.strip()
+                ):
+                    error = "session_id is required"
+                elif ids is None and single is None:
+                    error = "session_id is required" if method == "session.delete" else "session_ids is required"
+                elif ids is not None and any(not isinstance(sid, str) or not sid.strip() for sid in ids):
+                    error = "invalid resource ID"
+                else:
+                    error = None
+                if error is not None:
+                    await channel.send_response(ws, req_id, ok=False, error=error, code="BAD_REQUEST")
+                    return
+            ensure_watch(user_id)
             # Browser callers cannot inject internal stage acknowledgements.
             public = {}
             for k, v in params.items():

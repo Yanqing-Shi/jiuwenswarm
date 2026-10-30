@@ -211,16 +211,30 @@ async def test_session_delete_delegates_heartbeat_lifecycle_to_agentserver() -> 
 
         async def send_request(self, env):  # noqa: ANN001
             self.requests.append(env)
-            return SimpleNamespace(ok=True, payload={"session_id": "tui-session"})
+            return SimpleNamespace(ok=True, payload={"session_id": "tui-session", "project_id": "project-a"})
 
     channel = _TuiChannel()
+    registrations = []
+    register = channel.register_local_handler
+
+    def record_registration(path, method, handler):
+        registrations.append((path, method))
+        register(path, method, handler)
+
+    channel.register_local_handler = record_registration
     agent = Agent()
+    deleted_from_projects = []
+
+    async def on_session_left_project(project_id: str, session_id: str) -> None:
+        deleted_from_projects.append((project_id, session_id))
+
     register_cli_handlers(
         CliHandlersBindParams(
             channel=channel,
             agent_client=agent,
             message_handler=object(),
             path="/tui",
+            on_session_left_project=on_session_left_project,
         )
     )
 
@@ -235,6 +249,53 @@ async def test_session_delete_delegates_heartbeat_lifecycle_to_agentserver() -> 
     assert len(agent.requests) == 1
     assert agent.requests[0].method == "session.delete"
     assert agent.requests[0].params == {"session_id": "tui-session"}
+    assert registrations.count(("/tui", "session.delete")) == 1
+    assert deleted_from_projects == [("project-a", "tui-session")]
+
+
+@pytest.mark.asyncio
+async def test_session_delete_does_not_leave_project_when_agent_rejects() -> None:
+    class Agent:
+        async def send_request(self, env):  # noqa: ANN001
+            return SimpleNamespace(
+                ok=False,
+                payload={"session_id": "tui-session", "project_id": "project-a", "error": "delete failed"},
+            )
+
+    deleted_from_projects = []
+
+    async def on_session_left_project(project_id: str, session_id: str) -> None:
+        deleted_from_projects.append((project_id, session_id))
+
+    channel = _TuiChannel()
+    register_cli_handlers(
+        CliHandlersBindParams(
+            channel=channel,
+            agent_client=Agent(),
+            path="/tui",
+            on_session_left_project=on_session_left_project,
+        )
+    )
+
+    await channel.local_handlers["/tui"]["session.delete"](
+        object(), "req-delete", {"session_id": "tui-session"}, "current"
+    )
+
+    assert channel.responses[-1]["ok"] is False
+    assert deleted_from_projects == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["session.delete", "session.archive", "session.unarchive"])
+@pytest.mark.parametrize("params", [None, {}, {"session_ids": []}, {"session_ids": [""]}])
+async def test_tui_session_lifecycle_rejects_invalid_params(method, params) -> None:
+    channel = _TuiChannel()
+    register_cli_handlers(CliHandlersBindParams(channel=channel, path="/tui"))
+
+    await channel.local_handlers["/tui"][method](object(), "req", params, "current")
+
+    assert channel.responses[-1]["ok"] is False
+    assert channel.responses[-1]["code"] == "BAD_REQUEST"
 
 
 @pytest.mark.asyncio

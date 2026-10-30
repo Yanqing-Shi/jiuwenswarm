@@ -512,7 +512,6 @@ def register_cli_handlers(bind: CliHandlersBindParams) -> None:
     cron_controller_ref = bind.cron_controller
     heartbeat_controller_ref = bind.heartbeat_controller
     force_local_config = bind.force_local_config
-    on_session_left_project = bind.on_session_left_project
     from gateway.routing.third_agent import get_unsupported_third_agent
 
     third_agent = bind.third_agent if bind.third_agent is not None else get_unsupported_third_agent()
@@ -774,44 +773,6 @@ def register_cli_handlers(bind: CliHandlersBindParams) -> None:
             ws, req_id, ok=False, error=str(err), code=code,
         )
 
-
-    async def _session_delete(ws, req_id, params, session_id, user_id=None):
-        """删除一个 session（统一薄代理 E2A 转发）。
-
-        AgentServer 不可达时返回 SERVICE_UNAVAILABLE；Gateway 不再跑本地
-        SessionAdapter 删除路径。
-        """
-        from openjiuwen_protocol.message import ReqMethod
-        from gateway.routing.e2a_proxy import proxy_unary_request
-
-        if not isinstance(params, dict):
-            await channel.send_response(
-                ws, req_id, ok=False, error="params must be object", code="BAD_REQUEST"
-            )
-            return
-        target = str(params.get("session_id") or "").strip()
-        if not target:
-            await channel.send_response(
-                ws, req_id, ok=False, error="session_id is required", code="BAD_REQUEST"
-            )
-            return
-
-        async def _left_project(ok: bool, payload: dict[str, Any]) -> None:
-            if ok and on_session_left_project is not None:
-                await on_session_left_project(str(payload.get("project_id") or ""), target)
-
-        await proxy_unary_request(
-            channel=channel,
-            agent_client=_resolve_agent_client(agent_client),
-            ws=ws,
-            req_id=req_id,
-            params=params,
-            session_id=session_id,
-            user_id=user_id,
-            req_method=ReqMethod.SESSION_DELETE,
-            label="session.delete",
-            on_done=_left_project,
-        )
 
     async def _forward_rewind_e2a(params: ForwardRewindE2AParams) -> bool:
         """Forward a rewind request to AgentServer via E2A.
@@ -1700,7 +1661,6 @@ def register_cli_handlers(bind: CliHandlersBindParams) -> None:
     channel.register_local_handler(path, "session.list", _session_list)
     channel.register_local_handler(path, "session.create", _session_create)
     channel.register_local_handler(path, "session.rebind_project", _session_rebind_project)
-    channel.register_local_handler(path, "session.delete", _session_delete)
     channel.register_local_handler(path, "session.rename", _session_rename)
     channel.register_local_handler(path, "session.color_set", _session_color_set)
     channel.register_local_handler(path, "session.preview", _session_preview)
@@ -1715,6 +1675,7 @@ def register_cli_handlers(bind: CliHandlersBindParams) -> None:
         channel,
         lambda: _resolve_agent_client(agent_client),
         lambda: cron_controller_ref,
+        on_session_deleted=bind.on_session_left_project,
         register_method=lambda method, handler: channel.register_local_handler(
             path, method, handler
         ),
