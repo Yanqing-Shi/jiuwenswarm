@@ -8,6 +8,7 @@ import { createRenameCommand } from "../dist/core/commands/builtins/rename.js";
 class FakeClient {
   requests = [];
   frames = [];
+  cancelledRequests = [];
   async request(id, method, params) {
     this.requests.push({ method, params });
     if (method === "session.create") {
@@ -16,6 +17,7 @@ class FakeClient {
     return { type: "res", id, ok: true, payload: {} };
   }
   send(frame) { this.frames.push(frame); }
+  cancelRequest(id) { this.cancelledRequests.push(id); }
   disconnect() {}
 }
 
@@ -51,6 +53,66 @@ assert.equal(client.frames[0].params.session_id, "allocated-session");
 assert.equal(state.getSnapshot().sessionId, "allocated-session");
 assert.equal(state.getSnapshot().entries.at(-1)?.sessionId, "allocated-session");
 state.stop();
+
+class DeferredDraftClient extends FakeClient {
+  releaseCreation;
+
+  async request(id, method, params) {
+    this.requests.push({ id, method, params });
+    if (method === "session.create") {
+      return await new Promise((resolve) => {
+        this.releaseCreation = () => resolve({
+          type: "res", id, ok: true, payload: { session_id: "created-after-cancel" },
+        });
+      });
+    }
+    return { type: "res", id, ok: true, payload: {} };
+  }
+}
+
+const deferredClient = new DeferredDraftClient();
+const deferredState = new CliPiAppState(deferredClient);
+deferredState.connectionStatus = "connected";
+deferredState.initializeBootSession();
+await deferredState.bootSessionCreation;
+deferredState.sendMessage("first message");
+await waitFor(() => typeof deferredClient.releaseCreation === "function");
+assert.equal(deferredState.requestLocalInterrupt(), false, "Ctrl+C must preserve draft creation");
+deferredState.cancel();
+deferredState.supplement("extra input");
+assert.equal(deferredClient.cancelledRequests.length, 0);
+assert.equal(deferredClient.frames.length, 0, "no frame may use the draft token");
+deferredClient.releaseCreation();
+await waitFor(() => deferredClient.frames.length === 3);
+assert.deepEqual(deferredClient.frames.map((frame) => frame.method), [
+  "chat.send", "chat.interrupt", "chat.interrupt",
+]);
+assert.deepEqual(deferredClient.frames.map((frame) => frame.params.session_id), [
+  "created-after-cancel", "created-after-cancel", "created-after-cancel",
+]);
+assert.equal(deferredClient.frames[1].params.intent, "cancel");
+assert.equal(deferredClient.frames[2].params.intent, "supplement");
+deferredState.stop();
+
+class FailedDraftClient extends FakeClient {
+  async request(id, method, params) {
+    this.requests.push({ id, method, params });
+    if (method === "session.create") throw new Error("create unavailable");
+    return { type: "res", id, ok: true, payload: {} };
+  }
+}
+
+const failedClient = new FailedDraftClient();
+const failedState = new CliPiAppState(failedClient);
+failedState.connectionStatus = "connected";
+failedState.initializeBootSession();
+await failedState.bootSessionCreation;
+failedState.sendMessage("unsent message");
+failedState.cancel();
+await waitFor(() => failedState.getSnapshot().entries.at(-1)?.kind === "error");
+assert.equal(failedClient.frames.length, 0, "failed creation must discard queued chat and interrupt frames");
+assert.equal(failedClient.requests.filter(({ method }) => method === "session.create").length, 1);
+failedState.stop();
 
 const closeClient = new FakeClient();
 const closeState = new CliPiAppState(closeClient, "closing-session");

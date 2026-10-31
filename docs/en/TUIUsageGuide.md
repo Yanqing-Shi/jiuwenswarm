@@ -2,6 +2,8 @@
 
 > Full walkthrough (CLI flags, tools, keyboard shortcuts, Code mode): Chinese [TUI 使用指南](../zh/TUI使用指南.md). Install and first run: [Quick start (TUI)](Quickstart_tui.md).
 
+When the first message creates a draft session, Ctrl+C and supplemental input wait for creation; the TUI sends the message first and then the interrupt or supplement using the assigned session ID. If another window archives or deletes an open session, its TUI receives the lifecycle event and enters a fresh draft.
+
 ---
 
 ## Slash command reference
@@ -19,7 +21,7 @@ Top-level commands from `createBuiltinCommands()` in `jiuwenswarm/channels/tui/f
 | `/clear` | `/reset` | Clear transcript and open a draft; the next message creates a session (rejected while busy) | `/clear` | All |
 | `/new` | - | Open a draft; the next message creates a session. `--persist` creates a Persist Session immediately. | `/new` | All |
 | `/archive` | - | Archive a session only when its task is idle; an open TUI enters a fresh draft after acceptance | `/archive` | All |
-| `/delete` | - | Permanently delete any active or archived session after confirmation; an open TUI enters a fresh draft after acceptance | `/delete` | All |
+| `/delete` | - | Permanently delete an idle active or archived session after confirmation; an open TUI enters a fresh draft after acceptance | `/delete` | All |
 | `/unarchive` | `/restore` | Restore an archived session after confirmation; use `/resume <id>` to switch to it | `/unarchive` | All |
 | `/copy` | - | Copy the Nth most recent assistant reply to clipboard | `/copy` or `/copy 2` | All |
 | `/theme` | - | Switch dark / light theme | `/theme dark` | All |

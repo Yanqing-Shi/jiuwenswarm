@@ -339,6 +339,9 @@ export class CliPiAppState {
   private bootSessionCreation: Promise<void> | null = null;
   private draftSession = false;
   private draftCreatePromise: Promise<void> | null = null;
+  private draftCreateRequestId: string | null = null;
+  private pendingSessionFrames: Array<() => void> = [];
+  private pendingSessionFrameDrain: Promise<void> | null = null;
   private draftPreviousSessionId = "";
   private draftPreviousMode: ClientMode = "agent.code.normal";
   /** 启动时立即创建 Persist Session 所用的幂等 token。 */
@@ -1212,7 +1215,7 @@ export class CliPiAppState {
   requestLocalInterrupt(): boolean {
     this.interruptRequested = true;
     // 立即取消正在执行的命令 WS 请求（如 /recap），避免等待 60 秒超时
-    if (this.activeCommandRequestId) {
+    if (this.activeCommandRequestId && this.activeCommandRequestId !== this.draftCreateRequestId) {
       this.wsClient.cancelRequest(this.activeCommandRequestId, "cancelled");
       this.activeCommandRequestId = null;
       return true; // 命令请求被取消 → Ctrl+C 被消费，不应触发"连按两次退出"
@@ -1608,18 +1611,28 @@ export class CliPiAppState {
       });
     };
     const bootCreation = this.bootSessionCreation;
-    if (bootCreation || (method === "chat.send" && this.draftSession)) {
-      void (async () => {
-        if (bootCreation) await bootCreation;
-        if (method === "chat.send") await this.ensureDraftSessionCreated();
-        send();
-      })().catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        this.lastError = `session.create failed: ${message}`;
-        this.addItem(addError(this.sessionId, this.lastError));
-        this.setStreamingStateInternal(StreamingState.Idle);
-        this.emitChange();
-      });
+    if (bootCreation || this.draftSession || this.pendingSessionFrameDrain) {
+      this.pendingSessionFrames.push(send);
+      if (!this.pendingSessionFrameDrain) {
+        this.pendingSessionFrameDrain = Promise.resolve().then(async () => {
+          try {
+            if (bootCreation) await bootCreation;
+            if (this.draftSession) await this.ensureDraftSessionCreated();
+            while (this.pendingSessionFrames.length > 0) {
+              this.pendingSessionFrames.shift()?.();
+            }
+          } catch (error) {
+            this.pendingSessionFrames = [];
+            const message = error instanceof Error ? error.message : String(error);
+            this.lastError = `session.create failed: ${message}`;
+            this.addItem(addError(this.sessionId, this.lastError));
+            this.setStreamingStateInternal(StreamingState.Idle);
+            this.emitChange();
+          } finally {
+            this.pendingSessionFrameDrain = null;
+          }
+        });
+      }
     } else send();
     return id;
   };
@@ -1636,6 +1649,9 @@ export class CliPiAppState {
     const id = `tui_${Date.now().toString(16)}_${Math.random().toString(36).slice(2, 6)}`;
     // 记录当前命令请求 ID，以便 Ctrl+C 时能立即取消 WS 请求
     this.activeCommandRequestId = id;
+    if (method === "session.create" && this.draftSession) {
+      this.draftCreateRequestId = id;
+    }
     const { projectDir, cwd, trustedDirs } = this.resolveRequestPaths();
     try {
       const response = await this.wsClient.request(
@@ -1671,6 +1687,9 @@ export class CliPiAppState {
       // 请求完成后清理追踪（无论成功/失败/取消）
       if (this.activeCommandRequestId === id) {
         this.activeCommandRequestId = null;
+      }
+      if (this.draftCreateRequestId === id) {
+        this.draftCreateRequestId = null;
       }
     }
   };
@@ -2517,7 +2536,7 @@ export class CliPiAppState {
     // Set local interrupt flag immediately for long-running command detection
     this.interruptRequested = true;
     // 同时取消正在执行的命令 WS 请求（与 requestLocalInterrupt 保持一致）
-    if (this.activeCommandRequestId) {
+    if (this.activeCommandRequestId && this.activeCommandRequestId !== this.draftCreateRequestId) {
       this.wsClient.cancelRequest(this.activeCommandRequestId, "cancelled");
       this.activeCommandRequestId = null;
     }

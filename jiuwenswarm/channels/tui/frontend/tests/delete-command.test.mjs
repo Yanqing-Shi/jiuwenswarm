@@ -7,13 +7,14 @@ import { findReusableEmptySession } from "../dist/core/commands/helpers.js";
 const command = createDeleteCommand();
 assert.ok(createBuiltinCommands().some((item) => item.name === "delete"));
 
-function createContext({ sessions, archivedSessions = [], answers, failDelete = false }) {
+function createContext({ sessions, archivedSessions = [], answers, failDelete = false, rejectDelete = false, isProcessing = false }) {
   const requests = [];
   const questions = [];
   const entries = [];
   let nextSessionNumber = 0;
   const ctx = {
     sessionId: "current-session",
+    isProcessing,
     request: async (method, params) => {
       requests.push({ method, params });
       if (method === "session.list") return { sessions };
@@ -25,7 +26,20 @@ function createContext({ sessions, archivedSessions = [], answers, failDelete = 
         return { session_id: `fresh-session-${nextSessionNumber}` };
       }
       if (method === "session.delete" && failDelete) throw new Error("delete rejected");
-      if (method === "session.delete") return { session_id: params.session_id, accepted: true };
+      if (method === "session.delete" && rejectDelete) {
+        return {
+          succeeded_count: 0,
+          failed_count: 1,
+          results: [{ session_id: params.session_ids[0], error: "delete rejected" }],
+        };
+      }
+      if (method === "session.delete") {
+        return {
+          succeeded_count: 1,
+          failed_count: 0,
+          results: [{ session_id: params.session_ids[0], accepted: true }],
+        };
+      }
       throw new Error(`unexpected RPC: ${method}`);
     },
     updateSession: (sessionId) => {
@@ -63,6 +77,42 @@ const sessions = [
 ];
 
 {
+  const { ctx, requests, entries } = createContext({
+    sessions,
+    isProcessing: true,
+    answers: (step, question) => [
+      { selected_options: [step === 1 ? question.options[0].label : "Delete permanently"] },
+    ],
+  });
+  await command.action(ctx, "");
+  assert.equal(requests.some((request) => request.method === "session.delete"), false);
+  assert.equal(requests.some((request) => request.method === "redirect"), false);
+  assert.match(entries.at(-1).content, /session is busy; stop the current run before deleting/);
+}
+
+{
+  const { ctx, requests, questions, entries } = createContext({
+    sessions,
+    isProcessing: true,
+    answers: (step, question) => [
+      {
+        selected_options:
+          step === 1
+            ? [question.options.find((option) => option.label.includes("old-session")).label]
+            : ["Delete permanently"],
+      },
+    ],
+  });
+  await command.action(ctx, "");
+  assert.deepEqual(
+    requests.filter((request) => request.method === "session.delete"),
+    [{ method: "session.delete", params: { session_ids: ["old-session"] } }],
+  );
+  assert.equal(questions.length, 2);
+  assert.match(entries.at(-1).content, /Deletion accepted for old-session/);
+}
+
+{
   const { ctx, requests, questions, entries } = createContext({
     sessions,
     answers: (step, question) => [
@@ -78,7 +128,7 @@ const sessions = [
   assert.deepEqual(requests.find((request) => request.method === "session.list").params, { include_current: true, limit: 200, offset: 0 });
   assert.deepEqual(
     requests.filter((request) => request.method === "session.delete"),
-    [{ method: "session.delete", params: { session_id: "old-session" } }],
+    [{ method: "session.delete", params: { session_ids: ["old-session"] } }],
   );
   assert.equal(questions.length, 2);
   assert.deepEqual(
@@ -144,7 +194,7 @@ const sessions = [
   await command.action(ctx, "");
   assert.deepEqual(
     requests.filter((request) => request.method === "session.delete"),
-    [{ method: "session.delete", params: { session_id: "archived-session" } }],
+    [{ method: "session.delete", params: { session_ids: ["archived-session"] } }],
   );
   assert.ok(questions[0].items[0].options.some((option) => option.label.includes("[archived]")));
   assert.deepEqual(
@@ -178,7 +228,7 @@ const sessions = [
       .map((request) => request.method),
     ["session.delete", "session.create"],
   );
-  assert.equal(requests.find((request) => request.method === "session.delete").params.session_id, "current-session");
+  assert.deepEqual(requests.find((request) => request.method === "session.delete").params.session_ids, ["current-session"]);
   assert.equal(ctx.sessionId, "fresh-session-1");
   assert.match(entries.at(-1).content, /Deletion accepted for current-session/);
 }
@@ -197,6 +247,23 @@ const sessions = [
   assert.match(entries.at(-1).content, /delete failed: delete rejected/);
   assert.equal(entries.at(-1).kind, "error");
   assert.equal(requests.some((request) => request.method === "session.create"), false);
+  assert.equal(ctx.sessionId, "current-session");
+}
+
+{
+  const { ctx, entries, requests } = createContext({
+    sessions,
+    rejectDelete: true,
+    answers: (step, question) => [
+      {
+        selected_options: step === 1 ? [question.options[0].label] : ["Delete permanently"],
+      },
+    ],
+  });
+  await command.action(ctx, "");
+  assert.match(entries.at(-1).content, /delete failed for current-session: delete rejected/);
+  assert.equal(entries.at(-1).kind, "error");
+  assert.equal(requests.some((request) => request.method === "redirect"), false);
   assert.equal(ctx.sessionId, "current-session");
 }
 

@@ -364,7 +364,7 @@ async def test_archive_flushes_accepted_writes_without_stopping(archive, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_running_session_cannot_be_archived_but_can_be_deleted(archive):
+async def test_running_session_cannot_be_archived_or_deleted(archive):
     service, create, root, runtime = archive
     create()
     runtime.is_session_running.return_value = True
@@ -382,9 +382,16 @@ async def test_running_session_cannot_be_archived_but_can_be_deleted(archive):
 
     create("sess_b")
     runtime.is_session_running.return_value = True
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("sess_b", "delete", "web")
+    assert error.value.code == "SESSION_BUSY"
+    assert (root / "sessions/sess_b").exists()
+    assert lc.state("session", "sess_b").get("blocked") is False
+    runtime.delete_session.assert_not_awaited()
+
+    runtime.is_session_running.return_value = False
     deleted = await service.session("sess_b", "delete", "web")
     assert deleted["ok"] is True
-    assert deleted["finalizing"] is True
     runtime.delete_session.assert_awaited_once()
 
 
@@ -444,7 +451,7 @@ async def test_local_runner_team_execution_controls_lifecycle_busy(
     runtime._session_coordinator = SimpleNamespace(snapshot_session=lambda sid: None)
     runtime.is_session_running = lambda sid: AgentRuntime.is_session_running(runtime, sid)
 
-    if action == "archive" and phase in {"running", "pausing"}:
+    if phase in {"running", "pausing"}:
         from jiuwenswarm.server.runtime.session import lifecycle
 
         with pytest.raises(lifecycle.LifecycleError, match="running task"):
@@ -463,7 +470,7 @@ async def test_local_runner_team_execution_controls_lifecycle_busy(
         assert (root / "sessions_archived/sess_a").exists()
     else:
         runtime.delete_session.assert_awaited_once()
-    if phase in {"running", "pausing"} or action == "delete":
+    if action == "delete":
         runtime.stop_session_for_archive.assert_awaited_once()
 
 
@@ -1563,7 +1570,7 @@ async def test_archive_continues_when_flush_reports_pending(archive, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_delete_stops_heartbeat_instead_of_reporting_busy(archive, monkeypatch):
+async def test_delete_waits_for_heartbeat_to_stop(archive, monkeypatch):
     from jiuwenswarm.runtime.service import AgentRuntime
     from jiuwenswarm.runtime.session import SessionWorkKind
     from jiuwenswarm.runtime.session.model import SessionExecutionState
@@ -1613,8 +1620,13 @@ async def test_delete_stops_heartbeat_instead_of_reporting_busy(archive, monkeyp
     assert await admission.try_begin_heartbeat("heartbeat_run", "run-1")
     assert admission.is_heartbeat_active("heartbeat_run")
     assert runtime.is_session_running("heartbeat_run")
-    # A live heartbeat must not turn delete into a busy rejection: the action
-    # stops the run and its execution, then deletes a settled session.
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("heartbeat_run", "delete", "web")
+    assert error.value.code == "SESSION_BUSY"
+    assert cancelled_runs == []
+    runtime.delete_session.assert_not_awaited()
+
+    await runtime.stop_heartbeat_runs("heartbeat_run")
     assert (await service.session("heartbeat_run", "delete", "web"))["ok"]
     assert cancelled_runs == ["run-1"]
     assert cancelled_executions == ["exec-heartbeat"]
@@ -1624,7 +1636,7 @@ async def test_delete_stops_heartbeat_instead_of_reporting_busy(archive, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_delete_proceeds_when_heartbeat_refuses_to_stop(archive, monkeypatch):
+async def test_delete_rejects_heartbeat_that_refuses_to_stop(archive, monkeypatch):
     from jiuwenswarm.runtime.service import AgentRuntime
     from jiuwenswarm.runtime.session import SessionWorkKind
     from jiuwenswarm.runtime.session.model import SessionExecutionState
@@ -1655,13 +1667,11 @@ async def test_delete_proceeds_when_heartbeat_refuses_to_stop(archive, monkeypat
     runtime.has_parked_team_streams = lambda sid: AgentRuntime.has_parked_team_streams(probe, sid)
     runtime.stop_heartbeat_runs = lambda sid: AgentRuntime.stop_heartbeat_runs(probe, sid)
     assert await admission.try_begin_heartbeat("heartbeat_run", "run-1")
-    result = await service.session("heartbeat_run", "delete", "web")
-    # A refused heartbeat no longer blocks the user-visible deletion.  The
-    # finalizer still attempts the stop; write fencing protects the directory
-    # from a late heartbeat write.
-    assert result["ok"] is True
-    assert result["finalizing"] is True
-    runtime.delete_session.assert_awaited_once()
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("heartbeat_run", "delete", "web")
+    assert error.value.code == "SESSION_BUSY"
+    assert admission.is_heartbeat_active("heartbeat_run")
+    runtime.delete_session.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1679,7 +1689,7 @@ async def test_archive_releases_subagents_instead_of_reporting_busy(archive):
 
 
 @pytest.mark.asyncio
-async def test_delete_releases_finishing_subagents(archive):
+async def test_delete_waits_for_finishing_subagents(archive):
     service, create, _, runtime = archive
     create("subagent_finishing")
 
@@ -1689,11 +1699,16 @@ async def test_delete_releases_finishing_subagents(archive):
     runtime.is_session_running = Mock(return_value=True)
     runtime.stop_subagent_runtimes = release
     runtime.is_subagent_finishing = lambda sid, *, channel_id="": True
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("subagent_finishing", "delete", "web")
+    assert error.value.code == "SESSION_BUSY"
+    runtime.delete_session.assert_not_awaited()
+
+    runtime.is_session_running.return_value = False
     result = await service.session("subagent_finishing", "delete", "web")
     assert result["ok"] is True
     assert result["finalizing"] is True
-    # The resident subagent is released in the background instead of turning
-    # the user's delete into a busy rejection.
+    # A settled session can still release resident subagents during cleanup.
     runtime.delete_session.assert_awaited_once()
 
 

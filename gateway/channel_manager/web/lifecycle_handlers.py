@@ -17,8 +17,19 @@ def register_lifecycle_handlers(
     on_session_deleted=None,
     *,
     register_method=None,
+    clients_for_user=None,
+    session_event_clients=None,
 ):
     watchers = {}
+
+    def connected_clients(user_id):
+        if clients_for_user is not None:
+            return clients_for_user(user_id)
+        return [
+            ws
+            for ws in getattr(channel, "clients", ())
+            if str(channel.connection_user_id(ws) or "") == str(user_id or "")
+        ]
 
     async def call(method, params, session_id, user_id):
         return await fetch_agent_unary(
@@ -35,11 +46,7 @@ def register_lifecycle_handlers(
         revisions = {}
         first = True
         while True:
-            clients = [
-                ws
-                for ws in getattr(channel, "clients", ())
-                if str(channel.connection_user_id(ws) or "") == str(user_id or "")
-            ]
+            clients = connected_clients(user_id)
             if not clients:
                 return
             try:
@@ -57,9 +64,18 @@ def register_lifecycle_handlers(
                         if entry["completed"] and entry["kind"] in {"archive", "delete"}:
                             if entry["event"].startswith("session."):
                                 mark_sessions_idle([payload["resource_id"]])
-                        if first:
+                        if first and (
+                            session_event_clients is None
+                            or not entry["event"].startswith("session.")
+                            or not payload.get("execution_blocked")
+                        ):
                             continue
-                        for ws in clients:
+                        event_clients = (
+                            session_event_clients(user_id, payload["resource_id"])
+                            if session_event_clients is not None and entry["event"].startswith("session.")
+                            else ([] if session_event_clients is not None else clients)
+                        )
+                        for ws in event_clients:
                             await channel.send_event(ws, entry["event"], payload)
                             if entry["completed"] and not (
                                 entry["kind"] == "delete"
@@ -99,7 +115,7 @@ def register_lifecycle_handlers(
         owner = str(user_id or "")
         if owner not in watchers or watchers[owner].done():
             watchers[owner] = asyncio.create_task(
-                watch(owner), name="web-lifecycle-events"
+                watch(owner), name=f"{channel.channel_id}-lifecycle-events"
             )
 
     channel.ensure_lifecycle_watch = ensure_watch
@@ -214,9 +230,7 @@ def register_lifecycle_handlers(
                     item.get("project_id") for item in payload.get("results", [payload])
                     if item.get("ok", True) and item.get("restored") and item.get("project_id")
                 }
-                for client_ws in list(getattr(channel, "clients", ()) or ()):
-                    if str(channel.connection_user_id(client_ws) or "") != str(user_id or ""):
-                        continue
+                for client_ws in connected_clients(user_id):
                     for project_id in project_ids:
                         try:
                             await channel.send_event(client_ws, "project.restored", {"project_id": project_id})
@@ -244,7 +258,14 @@ def register_lifecycle_handlers(
                                 clear_expert(item["session_id"])
                             send_event = getattr(channel, "send_event", None)
                             if callable(send_event):
-                                await send_event(ws, event, item)
+                                targets = (
+                                    session_event_clients(user_id, item["session_id"])
+                                    if session_event_clients is not None else [ws]
+                                )
+                                if not any(client_ws is ws for client_ws in targets):
+                                    targets = [*targets, ws]
+                                for client_ws in targets:
+                                    await send_event(client_ws, event, item)
                 elif "operation_id" not in payload and (method != "project.delete" or payload.get("deleted")):
                     send_event = getattr(channel, "send_event", None)
                     if callable(send_event):

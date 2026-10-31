@@ -1671,6 +1671,37 @@ def register_cli_handlers(bind: CliHandlersBindParams) -> None:
         register_lifecycle_handlers,
     )
 
+    def _tui_clients_for_user(user_id: str | None) -> list[Any]:
+        find_clients = getattr(channel, "_find_channel_clients", None)
+        connection_user_id = getattr(channel, "_connection_user_id", None)
+        if not callable(find_clients) or not callable(connection_user_id):
+            return []
+        clients = []
+        seen = set()
+        for client_ws in find_clients("tui"):
+            if id(client_ws) in seen:
+                continue
+            seen.add(id(client_ws))
+            if str(connection_user_id(client_ws) or "") == str(user_id or ""):
+                clients.append(client_ws)
+        return clients
+
+    def _tui_session_event_clients(user_id: str | None, target_session_id: str) -> list[Any]:
+        connection_user_id = getattr(channel, "_connection_user_id", None)
+        if not callable(connection_user_id):
+            return []
+        clients = []
+        seen = set()
+        for key, client_ws in getattr(channel, "_session_to_client", {}).items():
+            if not isinstance(key, tuple) or len(key) < 2 or key[:2] != ("tui", target_session_id):
+                continue
+            if id(client_ws) in seen or getattr(client_ws, "closed", False):
+                continue
+            seen.add(id(client_ws))
+            if str(connection_user_id(client_ws) or "") == str(user_id or ""):
+                clients.append(client_ws)
+        return clients
+
     register_lifecycle_handlers(
         channel,
         lambda: _resolve_agent_client(agent_client),
@@ -1679,6 +1710,8 @@ def register_cli_handlers(bind: CliHandlersBindParams) -> None:
         register_method=lambda method, handler: channel.register_local_handler(
             path, method, handler
         ),
+        clients_for_user=_tui_clients_for_user,
+        session_event_clients=_tui_session_event_clients,
     )
     channel.register_local_handler(path, "command.rewind_compact", _command_rewind_compact)
     channel.register_local_handler(path, "history.list_turns", _history_list_turns)
@@ -2457,7 +2490,11 @@ def register_cli_handlers(bind: CliHandlersBindParams) -> None:
 
 
 def build_cli_route_binding(bind: CliRouteBindParams) -> GatewayRouteBinding:
+    gateway_server = None
+
     def _install(channel: Any) -> None:
+        nonlocal gateway_server
+        gateway_server = channel
         # ``GatewayServer`` multiplexes ACP and TUI routes and therefore does
         # not have a class-level channel_id like ``TuiChannel``.  The CLI
         # handlers below use the value when building E2A envelopes; install a
@@ -2514,6 +2551,13 @@ def build_cli_route_binding(bind: CliRouteBindParams) -> GatewayRouteBinding:
         )
 
     def _tui_session_bound(channel_id: str, session_id: str) -> None:
+        if gateway_server is not None and channel_id == "tui":
+            ensure_watch = getattr(gateway_server, "ensure_lifecycle_watch", None)
+            find_clients = getattr(gateway_server, "_find_channel_clients", None)
+            connection_user_id = getattr(gateway_server, "_connection_user_id", None)
+            if callable(ensure_watch) and callable(find_clients) and callable(connection_user_id):
+                for client_ws in find_clients(channel_id):
+                    ensure_watch(connection_user_id(client_ws))
         mh = bind.message_handler
         if mh is None or not hasattr(mh, "cancel_scheduled_disconnect_cancel"):
             return

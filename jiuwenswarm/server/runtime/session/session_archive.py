@@ -310,10 +310,12 @@ class SessionArchiveService:
                         "OPERATION_IN_PROGRESS", "project operation is pending"
                     )
                 return await self._session(
-                    session_id, action, channel_id, project_id
+                    session_id, action, channel_id, project_id,
+                    require_idle=action == "delete",
                 )
         return await self._session(
-            session_id, action, channel_id, project_id
+            session_id, action, channel_id, project_id,
+            require_idle=action == "delete",
         )
 
     def _session_message_service(self):
@@ -869,6 +871,7 @@ class SessionArchiveService:
         project_id: str,
         *,
         preloaded_meta: dict | None = None,
+        require_idle: bool = False,
     ) -> dict:
         async with self.lock("session", session_id):
             active, archived = lc.session_paths(session_id)
@@ -929,6 +932,7 @@ class SessionArchiveService:
                 pin_reindex_required,
                 previous,
                 pending,
+                require_idle,
             )
 
     async def _accept_session_cleanup(
@@ -943,6 +947,7 @@ class SessionArchiveService:
         pin_reindex_required: bool,
         previous: dict | None,
         pending: bool,
+        require_idle: bool,
     ) -> dict:
         """Persist the logical result and return without waiting for cleanup."""
         if action == "delete" and previous and previous.get("runtime_deleted"):
@@ -981,7 +986,10 @@ class SessionArchiveService:
             return self._accepted_payload(
                 session_id, action, project_id, previous
             )
-        if action == "archive" and not pending and not archived.exists():
+        if not pending and (
+            (action == "archive" and not archived.exists())
+            or (require_idle and active.exists())
+        ):
             # Fence admission before checking Runtime state so a new task
             # cannot start between the idle check and the archive operation.
             lc.set_visibility(
@@ -1001,7 +1009,7 @@ class SessionArchiveService:
                 if running_probe(session_id):
                     raise lc.LifecycleError(
                         "SESSION_BUSY",
-                        "session has a running task and cannot be archived",
+                        f"session has a running task and cannot be {action}d",
                     )
             except Exception:
                 lc.set_visibility(

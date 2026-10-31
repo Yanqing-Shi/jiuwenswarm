@@ -7,6 +7,18 @@ interface DeleteCandidate {
   archived: boolean;
 }
 
+interface DeleteBatchResult {
+  session_id?: string;
+  error?: string;
+  code?: string;
+}
+
+interface DeleteBatchPayload {
+  succeeded_count?: number;
+  failed_count?: number;
+  results?: DeleteBatchResult[];
+}
+
 function sessionLabel(session: SessionMeta, archived = false): string {
   const title = session.title?.trim();
   let label = title ? `${title} (${session.session_id})` : session.session_id;
@@ -95,7 +107,19 @@ export function createDeleteCommand(): SlashCommand {
           return;
         }
 
-        await ctx.request("session.delete", { session_id: selected.session.session_id });
+        if (selected.session.session_id === ctx.sessionId && ctx.isProcessing) {
+          ctx.addItem(addError(ctx.sessionId, "session is busy; stop the current run before deleting"));
+          return;
+        }
+
+        const payload = await ctx.request<DeleteBatchPayload>("session.delete", {
+          session_ids: [selected.session.session_id],
+        });
+        if ((payload.failed_count ?? 0) > 0 || (payload.succeeded_count ?? 0) !== 1) {
+          const result = payload.results?.find((item) => item.session_id === selected.session.session_id);
+          const detail = result?.error || result?.code || "the server did not confirm the operation";
+          throw new Error(`delete failed for ${selected.session.session_id}: ${detail}`);
+        }
         deletionAccepted = true;
         const displaySessionId = selected.session.session_id === ctx.sessionId
           ? await ctx.redirectFromClosedSession(selected.session.session_id, "delete")
