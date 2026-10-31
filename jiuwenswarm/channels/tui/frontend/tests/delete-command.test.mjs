@@ -6,8 +6,17 @@ import { findReusableEmptySession } from "../dist/core/commands/helpers.js";
 
 const command = createDeleteCommand();
 assert.ok(createBuiltinCommands().some((item) => item.name === "delete"));
+assert.match(command.description, /永久删除会话/);
 
-function createContext({ sessions, archivedSessions = [], answers, failDelete = false, rejectDelete = false, isProcessing = false }) {
+function createContext({
+  sessions,
+  archivedSessions = [],
+  answers,
+  failDelete = false,
+  rejectDelete = false,
+  isProcessing = false,
+  preferredLanguage = "en",
+}) {
   const requests = [];
   const questions = [];
   const entries = [];
@@ -15,6 +24,7 @@ function createContext({ sessions, archivedSessions = [], answers, failDelete = 
   const ctx = {
     sessionId: "current-session",
     isProcessing,
+    preferredLanguage,
     request: async (method, params) => {
       requests.push({ method, params });
       if (method === "session.list") return { sessions };
@@ -275,4 +285,41 @@ const sessions = [
   await command.action(ctx, "");
   assert.equal(ctx.sessionId, "existing-empty");
   assert.equal(requests.some((request) => request.method === "session.create"), false);
+}
+
+{
+  const { ctx, entries, questions, requests } = createContext({
+    sessions,
+    archivedSessions: [{ session_id: "archived-session", title: "旧会话", message_count: 7 }],
+    preferredLanguage: "zh",
+    answers: (step, question) => [{
+      selected_options: [step === 1
+        ? question.options.find((option) => option.label.includes("archived-session")).label
+        : "永久删除"],
+    }],
+  });
+  await command.action(ctx, "");
+  assert.equal(questions[0].items[0].header, "删除会话");
+  assert.match(questions[0].items[0].options.at(-1).label, /\[已归档\]/);
+  assert.match(questions[0].items[0].options.at(-1).description, /7 条消息/);
+  assert.match(questions[1].items[0].question, /此操作无法撤销/);
+  assert.deepEqual(
+    requests.find((request) => request.method === "session.delete").params.session_ids,
+    ["archived-session"],
+  );
+  assert.match(entries.at(-1).content, /已受理删除 archived-session/);
+}
+
+{
+  const { ctx, entries, requests } = createContext({
+    sessions,
+    isProcessing: true,
+    preferredLanguage: "zh",
+    answers: (step, question) => [{
+      selected_options: [step === 1 ? question.options[0].label : "永久删除"],
+    }],
+  });
+  await command.action(ctx, "");
+  assert.equal(requests.some((request) => request.method === "session.delete"), false);
+  assert.match(entries.at(-1).content, /会话正在运行；请先停止当前任务再删除/);
 }
