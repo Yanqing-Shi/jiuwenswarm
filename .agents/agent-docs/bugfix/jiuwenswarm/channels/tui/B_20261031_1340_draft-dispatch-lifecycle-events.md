@@ -49,6 +49,14 @@ design_note: Narrow repair of the TUI draft and session lifecycle behavior in PR
 
 ## 后续复查：创建在途时切换会话
 
-草稿首条消息触发的 `session.create` 在途期间若切换会话，响应到达时旧逻辑直接返回，已创建的空会话无人认领。原发送队列还可能把旧草稿消息发到切换后的会话。现为排队帧记录所属会话，只在原草稿成功转成真实会话时迁移归属；切换后丢弃旧帧，并在后台请求删除已创建的旧空会话。删除失败时在当前会话显示错误，避免无声遗留。未接入的 `findReusableEmptySession` 及其模拟复用的测试路径已移除。
+草稿首条消息触发的 `session.create` 在途期间若切换会话，响应到达时旧逻辑直接返回，已创建的空会话无人认领。原发送队列还可能把旧草稿消息发到切换后的会话。现为排队帧记录所属会话，只在原草稿成功转成真实会话时迁移归属；切换后丢弃旧帧，并在后台请求删除已创建的旧空会话。删除请求失败时在当前会话显示错误。服务端接受删除请求后仍可能在后台继续清理，不将受理响应视为物理删除完成。未接入的 `findReusableEmptySession` 及其模拟复用的测试路径已移除。
 
 使用本机 WorkSwarm 附带的 Node 运行 TypeScript 构建与 `draft-session.test.mjs`、`session-registration.test.mjs`、`archive-command.test.mjs`、`delete-command.test.mjs`，四个脚本均通过。新增用例覆盖切换到已保存会话和切换到另一草稿时的旧帧隔离与空会话清理。尚未进行真实 Gateway 与 TUI 多窗口联调。
+
+## 后续复查：创建响应超时或断线
+
+首个 `session.create` 响应可能在服务端创建会话后丢失。客户端现暂存原始 `create_token` 和创建参数：若草稿仍是当前会话，保留原有失败提示，等待后续发送重试；若已切走，在连接可用时以相同参数重试取回会话 ID，然后请求删除。断线期间等待重连，结果仍不明时每 5 秒重试；TUI 停止时取消定时器。确定性恢复失败和删除请求失败会显示错误。
+
+此恢复依赖当前 TUI 进程仍运行，以及 AgentServer 内存中的 `create_token` 映射。若 AgentServer 重启并丢失映射，重试可能得到新 ID，无法凭该 token 找到旧的空会话；TUI 退出后也不再重试。删除受理后的最终清理仍由服务端生命周期任务负责，本地用例不证明磁盘文件已经移除。
+
+本次用 WorkSwarm 附带的 Node 构建并运行上述四个 TUI 测试脚本，均通过；新增用例覆盖切换前后超时、断线后重连、相同 token/参数重试和旧消息不转发。另在 Python 3.14 环境定向运行服务端 `test_persist_session_is_create_identity_but_not_warm_key`，1 项通过，证实同一进程内相同 token 复用领取结果。未执行真实断线联调或物理删除完成验证。

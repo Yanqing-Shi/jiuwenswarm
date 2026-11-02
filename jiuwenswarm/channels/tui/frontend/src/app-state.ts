@@ -358,6 +358,10 @@ export class CliPiAppState {
   private draftSession = false;
   private draftCreatePromise: Promise<void> | null = null;
   private draftCreateRequestId: string | null = null;
+  private abandonedDraftCreates = new Map<string, Record<string, unknown>>();
+  private abandonedDraftRecoveryRunning = false;
+  private abandonedDraftRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  private stopped = false;
   private pendingSessionFrames: Array<{ sessionId: string; send: () => void }> = [];
   private pendingSessionFrameDrain: Promise<void> | null = null;
   private draftPreviousSessionId = "";
@@ -737,6 +741,7 @@ export class CliPiAppState {
   }
 
   start(): void {
+    this.stopped = false;
     this.unlistenStatus = this.wsClient.onStatusChange(async (status) => {
       this.connectionStatus = status;
       this.handleConnectionStatusChanged(status);
@@ -760,6 +765,7 @@ export class CliPiAppState {
   }
 
   stop(): void {
+    this.stopped = true;
     // 通知所有 stop 订阅器（等待型取消按 STATE_STOPPED reject）。
     for (const listener of this.stopListeners) {
       try {
@@ -781,6 +787,10 @@ export class CliPiAppState {
     if (this.toolTimeoutTimer) {
       clearTimeout(this.toolTimeoutTimer);
       this.toolTimeoutTimer = null;
+    }
+    if (this.abandonedDraftRecoveryTimer) {
+      clearTimeout(this.abandonedDraftRecoveryTimer);
+      this.abandonedDraftRecoveryTimer = null;
     }
     this.clearActiveTurnReconnectTimer();
     this.clearStreamStallWatchdog();
@@ -1013,6 +1023,7 @@ export class CliPiAppState {
       return;
     }
     if (status === "connected") {
+      this.scheduleAbandonedDraftRecovery();
       const hadReconnectNotice = this.activeTurnReconnectNoticeShown;
       this.clearActiveTurnReconnectTimer();
       this.activeTurnReconnectNoticeShown = false;
@@ -1985,6 +1996,7 @@ export class CliPiAppState {
   readonly updateSession = (newId: string): void => {
     this.sessionId = newId;
     this.draftSession = false;
+    this.scheduleAbandonedDraftRecovery();
     this.lastVisibleUserRequest = null;
     this.usageByModel.clear();
     this.resetCurrentUsageTokens();
@@ -2024,23 +2036,39 @@ export class CliPiAppState {
     if (!this.draftSession) return;
     if (this.draftCreatePromise) return this.draftCreatePromise;
     const draftId = this.sessionId;
+    const { projectDir, cwd, trustedDirs } = this.resolveRequestPaths();
+    const createParams = {
+      create_token: draftId,
+      previous_session_id: this.draftPreviousSessionId,
+      previous_mode: this.draftPreviousMode,
+      mode: this.mode,
+      ...(this.sessionTitle ? { title: this.sessionTitle } : {}),
+      ...(trustedDirs.length > 0 ? { trusted_dirs: trustedDirs } : {}),
+      ...(projectDir ? { project_dir: projectDir } : {}),
+      ...(cwd ? { cwd } : {}),
+    };
     const creation = (async () => {
-      const result = await this.requestAgentServer<{ session_id?: string; mode?: string }>(
-        "session.create",
-        {
-          create_token: draftId,
-          previous_session_id: this.draftPreviousSessionId,
-          previous_mode: this.draftPreviousMode,
-          mode: this.mode,
-          ...(this.sessionTitle ? { title: this.sessionTitle } : {}),
-        },
-        undefined,
-        false,
-      );
+      let result: { session_id?: string; mode?: string };
+      try {
+        result = await this.requestAgentServer("session.create", createParams, undefined, false);
+        if (!result.session_id) throw new Error("session.create did not return a session id");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const outcomeUnknown = this.isUncertainDraftCreateError(message);
+        if (outcomeUnknown) {
+          this.abandonedDraftCreates.set(draftId, createParams);
+          this.scheduleAbandonedDraftRecovery();
+        }
+        if (this.sessionId === draftId && this.draftSession) throw error;
+        if (!outcomeUnknown) {
+          this.addItem(addError(this.sessionId, `Unable to resolve abandoned draft ${draftId}: ${message}`));
+        }
+        return;
+      }
+      this.abandonedDraftCreates.delete(draftId);
       const realId = result.session_id;
-      if (!realId) throw new Error("session.create did not return a session id");
       if (this.sessionId !== draftId || !this.draftSession) {
-        if (realId !== this.sessionId) void this.deleteAbandonedDraftSession(realId);
+        if (realId !== this.sessionId) void this.requestAbandonedDraftDeletion(realId);
         return;
       }
       const pendingVisibleRequest = this.lastVisibleUserRequest;
@@ -2074,7 +2102,59 @@ export class CliPiAppState {
     }
   }
 
-  private async deleteAbandonedDraftSession(sessionId: string): Promise<void> {
+  private isUncertainDraftCreateError(message: string): boolean {
+    const normalized = message.toLowerCase();
+    return [
+      "timeout",
+      "timed out",
+      "disconnect",
+      "socket not connected",
+      "session.create did not return a session id",
+    ].some((marker) => normalized.includes(marker));
+  }
+
+  private scheduleAbandonedDraftRecovery(delayMs = 0): void {
+    if (this.connectionStatus !== "connected" || this.stopped) return;
+    if (this.abandonedDraftRecoveryRunning || this.abandonedDraftRecoveryTimer) return;
+    const hasAbandonedDraft = [...this.abandonedDraftCreates.keys()].some(
+      (draftId) => draftId !== this.sessionId || !this.draftSession,
+    );
+    if (!hasAbandonedDraft) return;
+    this.abandonedDraftRecoveryTimer = setTimeout(() => {
+      this.abandonedDraftRecoveryTimer = null;
+      void this.recoverAbandonedDraftCreates();
+    }, delayMs);
+  }
+
+  private async recoverAbandonedDraftCreates(): Promise<void> {
+    if (this.connectionStatus !== "connected" || this.stopped) return;
+    if (this.abandonedDraftRecoveryRunning) return;
+    this.abandonedDraftRecoveryRunning = true;
+    try {
+      for (const [draftId, params] of this.abandonedDraftCreates) {
+        if (this.connectionStatus !== "connected") break;
+        if (draftId === this.sessionId && this.draftSession) continue;
+        try {
+          const id = `tui_${Date.now().toString(16)}_${Math.random().toString(36).slice(2, 6)}`;
+          const response = await this.wsClient.request(id, "session.create", params, 30000);
+          const sessionId = (response.payload as { session_id?: string })?.session_id;
+          if (!sessionId) throw new Error("session.create did not return a session id");
+          this.abandonedDraftCreates.delete(draftId);
+          if (sessionId !== this.sessionId) await this.requestAbandonedDraftDeletion(sessionId);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (this.isUncertainDraftCreateError(message)) continue;
+          this.abandonedDraftCreates.delete(draftId);
+          this.addItem(addError(this.sessionId, `Unable to resolve abandoned draft ${draftId}: ${message}`));
+        }
+      }
+    } finally {
+      this.abandonedDraftRecoveryRunning = false;
+      this.scheduleAbandonedDraftRecovery(5000);
+    }
+  }
+
+  private async requestAbandonedDraftDeletion(sessionId: string): Promise<void> {
     try {
       const id = `tui_${Date.now().toString(16)}_${Math.random().toString(36).slice(2, 6)}`;
       const { projectDir, cwd, trustedDirs } = this.resolveRequestPaths();

@@ -156,6 +156,61 @@ assert.match(failedCleanupState.getSnapshot().lastError, /Unable to clean up aba
 assert.equal(failedCleanupClient.frames.length, 0);
 failedCleanupState.stop();
 
+class LostCreateResponseClient extends FakeClient {
+  rejectCreation;
+
+  async request(id, method, params) {
+    this.requests.push({ id, method, params });
+    if (method === "session.create") {
+      if (this.requests.filter((request) => request.method === "session.create").length === 1) {
+        return await new Promise((_, reject) => {
+          this.rejectCreation = reject;
+        });
+      }
+      return { type: "res", id, ok: true, payload: { session_id: "created-with-lost-response" } };
+    }
+    return { type: "res", id, ok: true, payload: {} };
+  }
+}
+
+for (const { name, error, failBeforeSwitch, reconnect } of [
+  { name: "timeout after switch", error: "request timeout: session.create", failBeforeSwitch: false, reconnect: false },
+  { name: "timeout before switch", error: "request timeout: session.create", failBeforeSwitch: true, reconnect: false },
+  { name: "disconnect", error: "disconnected", failBeforeSwitch: false, reconnect: true },
+]) {
+  const lostClient = new LostCreateResponseClient();
+  const lostState = new CliPiAppState(lostClient);
+  lostState.connectionStatus = "connected";
+  lostState.initializeBootSession();
+  await lostState.bootSessionCreation;
+  lostState.sendMessage(name);
+  await waitFor(() => typeof lostClient.rejectCreation === "function");
+  if (reconnect) lostState.connectionStatus = "reconnecting";
+  if (!failBeforeSwitch) lostState.updateSession(`resumed-${name}`);
+  lostClient.rejectCreation(new Error(error));
+  if (failBeforeSwitch) {
+    await waitFor(() => lostState.getSnapshot().lastError?.includes("session.create failed"));
+    assert.equal(lostClient.requests.filter(({ method }) => method === "session.create").length, 1);
+    lostState.updateSession(`resumed-${name}`);
+  }
+  if (reconnect) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(lostClient.requests.filter(({ method }) => method === "session.create").length, 1);
+    lostState.connectionStatus = "connected";
+    lostState.handleConnectionStatusChanged("connected");
+  }
+  await waitFor(() => lostClient.requests.some(({ method }) => method === "session.delete"));
+  const creates = lostClient.requests.filter(({ method }) => method === "session.create");
+  assert.equal(creates.length, 2, `${name} must replay the same create token once`);
+  assert.deepEqual(creates[1].params, creates[0].params, `${name} must preserve the original create parameters`);
+  assert.deepEqual(
+    lostClient.requests.find(({ method }) => method === "session.delete").params.session_ids,
+    ["created-with-lost-response"],
+  );
+  assert.equal(lostClient.frames.length, 0, `${name} must not send the abandoned message`);
+  lostState.stop();
+}
+
 class TwoDeferredCreationsClient extends FakeClient {
   releaseCreations = [];
 
