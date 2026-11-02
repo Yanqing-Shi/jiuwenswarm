@@ -82,12 +82,14 @@ def register_lifecycle_handlers(
                         if entry["completed"] and entry["kind"] in {"archive", "delete"}:
                             if entry["event"].startswith("session."):
                                 mark_sessions_idle([payload["resource_id"]])
-                        if first and (
-                            session_event_clients is None
-                            or not entry["event"].startswith("session.")
-                            or not payload.get("execution_blocked")
-                        ):
-                            continue
+                        if first:
+                            replay_blocked_session_event = (
+                                session_event_clients is not None
+                                and entry["event"].startswith("session.")
+                                and payload.get("execution_blocked")
+                            )
+                            if not replay_blocked_session_event:
+                                continue
                         event_clients = (
                             session_event_clients(user_id, payload["resource_id"])
                             if session_event_clients is not None and entry["event"].startswith("session.")
@@ -185,13 +187,16 @@ def register_lifecycle_handlers(
             if method in {"session.archive", "session.unarchive", "session.delete"}:
                 ids = params.get("session_ids")
                 single = params.get("session_id") if method == "session.delete" else None
+                invalid_single_id = (
+                    method == "session.delete"
+                    and "session_id" in params
+                    and (not isinstance(single, str) or not single.strip())
+                )
                 if "session_ids" in params and (
                     not isinstance(ids, list) or not 1 <= len(ids) <= 100
                 ):
                     error = "session_ids must contain 1 to 100 IDs"
-                elif method == "session.delete" and "session_id" in params and (
-                    not isinstance(single, str) or not single.strip()
-                ):
+                elif invalid_single_id:
                     error = "session_id is required"
                 elif ids is None and single is None:
                     error = "session_id is required" if method == "session.delete" else "session_ids is required"

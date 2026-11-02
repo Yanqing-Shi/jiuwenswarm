@@ -931,7 +931,6 @@ class SessionArchiveService:
                 owner_channel_id,
                 pin_reindex_required,
                 previous,
-                pending,
                 require_idle,
             )
 
@@ -946,10 +945,10 @@ class SessionArchiveService:
         owner_channel_id: str,
         pin_reindex_required: bool,
         previous: dict | None,
-        pending: bool,
         require_idle: bool,
     ) -> dict:
         """Persist the logical result and return without waiting for cleanup."""
+        pending = bool(previous and previous.get("status") != "completed")
         if action == "delete" and previous and previous.get("runtime_deleted"):
             project_id = str(previous.get("project_id") or project_id)
             owner_channel_id = str(previous.get("channel_id") or owner_channel_id)
@@ -986,10 +985,13 @@ class SessionArchiveService:
             return self._accepted_payload(
                 session_id, action, project_id, previous
             )
-        if not pending and (
-            (action == "archive" and not archived.exists())
-            or (require_idle and active.exists())
-        ):
+        needs_runtime_idle_check = False
+        if not pending:
+            needs_runtime_idle_check = (
+                (action == "archive" and not archived.exists())
+                or (require_idle and active.exists())
+            )
+        if needs_runtime_idle_check:
             # Fence admission before checking Runtime state so a new task
             # cannot start between the idle check and the archive operation.
             lc.set_visibility(
