@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 
 import { createDeleteCommand } from "../dist/core/commands/builtins/delete.js";
 import { createBuiltinCommands } from "../dist/core/commands/registry.js";
-import { findReusableEmptySession } from "../dist/core/commands/helpers.js";
 
 const command = createDeleteCommand();
 assert.ok(createBuiltinCommands().some((item) => item.name === "delete"));
@@ -57,13 +56,8 @@ function createContext({
     },
     redirectFromClosedSession: async (sessionId, action) => {
       requests.push({ method: "redirect", params: { sessionId, action } });
-      const reusable = findReusableEmptySession(sessions, sessionId);
-      if (reusable) {
-        ctx.sessionId = reusable.session_id;
-      } else {
-        const created = await ctx.request("session.create", {});
-        ctx.sessionId = created.session_id;
-      }
+      const created = await ctx.request("session.create", {});
+      ctx.sessionId = created.session_id;
       return ctx.sessionId;
     },
     setSessionTitle: () => undefined,
@@ -283,8 +277,8 @@ const sessions = [
     answers: (step, question) => [{ selected_options: [step === 1 ? question.options[0].label : "Delete permanently"] }],
   });
   await command.action(ctx, "");
-  assert.equal(ctx.sessionId, "existing-empty");
-  assert.equal(requests.some((request) => request.method === "session.create"), false);
+  assert.equal(ctx.sessionId, "fresh-session-1");
+  assert.equal(requests.some((request) => request.method === "session.create"), true);
 }
 
 {

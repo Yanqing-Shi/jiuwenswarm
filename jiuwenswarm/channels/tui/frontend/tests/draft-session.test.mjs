@@ -112,6 +112,89 @@ assert.equal(deferredClient.frames[1].params.intent, "cancel");
 assert.equal(deferredClient.frames[2].params.intent, "supplement");
 deferredState.stop();
 
+const abandonedClient = new DeferredDraftClient();
+const abandonedState = new CliPiAppState(abandonedClient);
+abandonedState.connectionStatus = "connected";
+abandonedState.initializeBootSession();
+await abandonedState.bootSessionCreation;
+abandonedState.sendMessage("message for abandoned draft");
+await waitFor(() => typeof abandonedClient.releaseCreation === "function");
+abandonedState.updateSession("resumed-session");
+abandonedClient.releaseCreation();
+await waitFor(() => abandonedClient.requests.some(({ method }) => method === "session.delete"));
+assert.equal(abandonedState.getSnapshot().sessionId, "resumed-session");
+assert.equal(abandonedClient.frames.length, 0, "abandoned draft messages must not reach the resumed session");
+assert.deepEqual(
+  abandonedClient.requests.find(({ method }) => method === "session.delete").params.session_ids,
+  ["created-after-cancel"],
+  "the newly created empty session must be cleaned up",
+);
+abandonedState.stop();
+
+class FailedCleanupClient extends DeferredDraftClient {
+  async request(id, method, params) {
+    if (method !== "session.delete") return super.request(id, method, params);
+    this.requests.push({ id, method, params });
+    return {
+      type: "res", id, ok: true,
+      payload: { succeeded_count: 0, failed_count: 1, results: [{ error: "delete rejected" }] },
+    };
+  }
+}
+
+const failedCleanupClient = new FailedCleanupClient();
+const failedCleanupState = new CliPiAppState(failedCleanupClient);
+failedCleanupState.connectionStatus = "connected";
+failedCleanupState.initializeBootSession();
+await failedCleanupState.bootSessionCreation;
+failedCleanupState.sendMessage("message for failed cleanup");
+await waitFor(() => typeof failedCleanupClient.releaseCreation === "function");
+failedCleanupState.updateSession("resumed-after-failure");
+failedCleanupClient.releaseCreation();
+await waitFor(() => failedCleanupState.getSnapshot().lastError?.includes("delete rejected"));
+assert.match(failedCleanupState.getSnapshot().lastError, /Unable to clean up abandoned session/);
+assert.equal(failedCleanupClient.frames.length, 0);
+failedCleanupState.stop();
+
+class TwoDeferredCreationsClient extends FakeClient {
+  releaseCreations = [];
+
+  async request(id, method, params) {
+    this.requests.push({ id, method, params });
+    if (method === "session.create") {
+      const createdId = `created-draft-${this.releaseCreations.length + 1}`;
+      return await new Promise((resolve) => {
+        this.releaseCreations.push(() => resolve({
+          type: "res", id, ok: true, payload: { session_id: createdId },
+        }));
+      });
+    }
+    return { type: "res", id, ok: true, payload: {} };
+  }
+}
+
+const nextDraftClient = new TwoDeferredCreationsClient();
+const nextDraftState = new CliPiAppState(nextDraftClient);
+nextDraftState.connectionStatus = "connected";
+nextDraftState.initializeBootSession();
+await nextDraftState.bootSessionCreation;
+nextDraftState.sendEventOnly("chat.send", { content: "first" }, true);
+await waitFor(() => nextDraftClient.releaseCreations.length === 1);
+nextDraftState.enterDraftSession();
+nextDraftState.sendEventOnly("chat.send", { content: "second" }, true);
+nextDraftClient.releaseCreations[0]();
+await waitFor(() => nextDraftClient.releaseCreations.length === 2);
+assert.equal(nextDraftClient.frames.length, 0, "the old draft must not send after a new draft starts");
+nextDraftClient.releaseCreations[1]();
+await waitFor(() => nextDraftClient.frames.length === 1);
+assert.equal(nextDraftClient.frames[0].params.session_id, "created-draft-2");
+assert.equal(nextDraftClient.frames[0].params.content, "second");
+assert.deepEqual(
+  nextDraftClient.requests.find(({ method }) => method === "session.delete").params.session_ids,
+  ["created-draft-1"],
+);
+nextDraftState.stop();
+
 class FailedDraftClient extends FakeClient {
   async request(id, method, params) {
     this.requests.push({ id, method, params });

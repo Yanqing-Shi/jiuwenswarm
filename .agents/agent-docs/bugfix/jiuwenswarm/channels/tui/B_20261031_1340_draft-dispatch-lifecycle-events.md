@@ -10,6 +10,10 @@ modules:
   - gateway/channel_manager/web
 files:
   - jiuwenswarm/channels/tui/frontend/src/app-state.ts
+  - jiuwenswarm/channels/tui/frontend/src/core/commands/helpers.ts
+  - jiuwenswarm/channels/tui/frontend/tests/draft-session.test.mjs
+  - jiuwenswarm/channels/tui/frontend/tests/archive-command.test.mjs
+  - jiuwenswarm/channels/tui/frontend/tests/delete-command.test.mjs
   - gateway/channel_manager/tui/tui_connect.py
   - gateway/channel_manager/web/lifecycle_handlers.py
 designs: []
@@ -42,3 +46,9 @@ design_note: Narrow repair of the TUI draft and session lifecycle behavior in PR
 ## 后续复查：草稿期的会话请求
 
 草稿期执行 `/rewind`、`/compact` 等命令时，之前会把尚未落库的 create token 作为 `session_id` 传给服务端。现于请求入口拦截需要已保存会话的 RPC，并提示先发送消息；`/resume` 使用明确的目标会话 ID，继续允许从草稿切换。`tests/draft-session.test.mjs` 覆盖直接请求及三个命令入口，验证没有发出草稿 ID 请求，首次聊天仍正常建会话。对应定向测试已通过。
+
+## 后续复查：创建在途时切换会话
+
+草稿首条消息触发的 `session.create` 在途期间若切换会话，响应到达时旧逻辑直接返回，已创建的空会话无人认领。原发送队列还可能把旧草稿消息发到切换后的会话。现为排队帧记录所属会话，只在原草稿成功转成真实会话时迁移归属；切换后丢弃旧帧，并在后台请求删除已创建的旧空会话。删除失败时在当前会话显示错误，避免无声遗留。未接入的 `findReusableEmptySession` 及其模拟复用的测试路径已移除。
+
+使用本机 WorkSwarm 附带的 Node 运行 TypeScript 构建与 `draft-session.test.mjs`、`session-registration.test.mjs`、`archive-command.test.mjs`、`delete-command.test.mjs`，四个脚本均通过。新增用例覆盖切换到已保存会话和切换到另一草稿时的旧帧隔离与空会话清理。尚未进行真实 Gateway 与 TUI 多窗口联调。

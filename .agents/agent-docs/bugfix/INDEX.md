@@ -41,7 +41,7 @@ generated: true
 
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
-| [B_20261031_1340_draft-dispatch-lifecycle-events](jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway/channel_manager/web | jiuwenswarm/channels/tui/frontend/src/app-state.ts, gateway/channel_manager/tui/tui_connect.py, gateway/channel_manager/web/lifecycle_handlers.py | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
+| [B_20261031_1340_draft-dispatch-lifecycle-events](jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway/channel_manager/web | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/helpers.ts, jiuwenswarm/channels/tui/frontend/tests/draft-session.test.mjs, jiuwenswarm/channels/tui/frontend/tests/archive-command.test.mjs, jiuwenswarm/channels/tui/frontend/tests/delete-command.test.mjs, gateway/channel_manager/tui/tui_connect.py, gateway/channel_manager/web/lifecycle_handlers.py | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
 
 <a id="module-3"></a>
 
@@ -49,7 +49,7 @@ generated: true
 
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
-| [B_20261031_1340_draft-dispatch-lifecycle-events](jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway/channel_manager/web | jiuwenswarm/channels/tui/frontend/src/app-state.ts, gateway/channel_manager/tui/tui_connect.py, gateway/channel_manager/web/lifecycle_handlers.py | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
+| [B_20261031_1340_draft-dispatch-lifecycle-events](jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway/channel_manager/web | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/helpers.ts, jiuwenswarm/channels/tui/frontend/tests/draft-session.test.mjs, jiuwenswarm/channels/tui/frontend/tests/archive-command.test.mjs, jiuwenswarm/channels/tui/frontend/tests/delete-command.test.mjs, gateway/channel_manager/tui/tui_connect.py, gateway/channel_manager/web/lifecycle_handlers.py | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
 
 <a id="module-4"></a>
 
@@ -81,7 +81,7 @@ generated: true
 
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
-| [B_20261031_1340_draft-dispatch-lifecycle-events](jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway/channel_manager/web | jiuwenswarm/channels/tui/frontend/src/app-state.ts, gateway/channel_manager/tui/tui_connect.py, gateway/channel_manager/web/lifecycle_handlers.py | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
+| [B_20261031_1340_draft-dispatch-lifecycle-events](jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway/channel_manager/web | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/helpers.ts, jiuwenswarm/channels/tui/frontend/tests/draft-session.test.mjs, jiuwenswarm/channels/tui/frontend/tests/archive-command.test.mjs, jiuwenswarm/channels/tui/frontend/tests/delete-command.test.mjs, gateway/channel_manager/tui/tui_connect.py, gateway/channel_manager/web/lifecycle_handlers.py | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
 
 <a id="module-8"></a>
 

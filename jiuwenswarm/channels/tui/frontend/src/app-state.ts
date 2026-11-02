@@ -358,7 +358,7 @@ export class CliPiAppState {
   private draftSession = false;
   private draftCreatePromise: Promise<void> | null = null;
   private draftCreateRequestId: string | null = null;
-  private pendingSessionFrames: Array<() => void> = [];
+  private pendingSessionFrames: Array<{ sessionId: string; send: () => void }> = [];
   private pendingSessionFrameDrain: Promise<void> | null = null;
   private draftPreviousSessionId = "";
   private draftPreviousMode: ClientMode = "agent.code.normal";
@@ -1630,14 +1630,22 @@ export class CliPiAppState {
     };
     const bootCreation = this.bootSessionCreation;
     if (bootCreation || this.draftSession || this.pendingSessionFrameDrain) {
-      this.pendingSessionFrames.push(send);
+      this.pendingSessionFrames.push({ sessionId: this.sessionId, send });
       if (!this.pendingSessionFrameDrain) {
         this.pendingSessionFrameDrain = Promise.resolve().then(async () => {
           try {
             if (bootCreation) await bootCreation;
-            if (this.draftSession) await this.ensureDraftSessionCreated();
             while (this.pendingSessionFrames.length > 0) {
-              this.pendingSessionFrames.shift()?.();
+              const pending = this.pendingSessionFrames[0]!;
+              if (pending.sessionId !== this.sessionId) {
+                this.pendingSessionFrames.shift();
+                continue;
+              }
+              if (this.draftSession) {
+                await this.ensureDraftSessionCreated();
+                continue;
+              }
+              this.pendingSessionFrames.shift()?.send();
             }
           } catch (error) {
             this.pendingSessionFrames = [];
@@ -2031,9 +2039,15 @@ export class CliPiAppState {
       );
       const realId = result.session_id;
       if (!realId) throw new Error("session.create did not return a session id");
-      if (this.sessionId !== draftId) return;
+      if (this.sessionId !== draftId || !this.draftSession) {
+        if (realId !== this.sessionId) void this.deleteAbandonedDraftSession(realId);
+        return;
+      }
       const pendingVisibleRequest = this.lastVisibleUserRequest;
       const draftAccent = this.accentColor;
+      for (const pending of this.pendingSessionFrames) {
+        if (pending.sessionId === draftId) pending.sessionId = realId;
+      }
       this.updateSession(realId);
       if (draftAccent !== "default") this.setAccentColor(draftAccent);
       const resolvedMode = normalizeToClientMode(result.mode ?? "");
@@ -2057,6 +2071,34 @@ export class CliPiAppState {
       await creation;
     } finally {
       if (this.draftCreatePromise === creation) this.draftCreatePromise = null;
+    }
+  }
+
+  private async deleteAbandonedDraftSession(sessionId: string): Promise<void> {
+    try {
+      const id = `tui_${Date.now().toString(16)}_${Math.random().toString(36).slice(2, 6)}`;
+      const { projectDir, cwd, trustedDirs } = this.resolveRequestPaths();
+      const response = await this.wsClient.request(id, "session.delete", {
+        session_id: sessionId,
+        session_ids: [sessionId],
+        ...(trustedDirs.length > 0 ? { trusted_dirs: trustedDirs } : {}),
+        ...(projectDir ? { project_dir: projectDir } : {}),
+        ...(cwd ? { cwd } : {}),
+      }, 30000);
+      const result = response.payload as {
+        failed_count?: number;
+        succeeded_count?: number;
+        results?: Array<{ error?: string }>;
+      };
+      if (
+        (result.failed_count ?? 0) > 0 ||
+        (result.succeeded_count !== undefined && result.succeeded_count !== 1)
+      ) {
+        throw new Error(result.results?.[0]?.error ?? "server rejected deletion");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.addItem(addError(this.sessionId, `Unable to clean up abandoned session ${sessionId}: ${message}`));
     }
   }
 
@@ -3824,6 +3866,9 @@ export class CliPiAppState {
       }
       const placeholderId = this.sessionId;
       const pendingVisibleRequest = this.lastVisibleUserRequest;
+      for (const pending of this.pendingSessionFrames) {
+        if (pending.sessionId === placeholderId) pending.sessionId = createdId;
+      }
       this.updateSession(createdId);
       if (target === null && placeholderId !== createdId) {
         this.entries = this.entries.map((entry) =>

@@ -36,37 +36,6 @@ export function addCommandEcho(sessionId: string, content: string): HistoryItem 
   return makeItem(sessionId, "command_echo", content);
 }
 
-export interface ReusableEmptySession {
-  session_id: string;
-  message_count: number;
-  created_at?: number;
-  mode?: string;
-  accent_color?: string;
-  active_in_window?: boolean;
-}
-
-export function findReusableEmptySession(
-  sessions: unknown,
-  excludedSessionId: string,
-): ReusableEmptySession | undefined {
-  if (!Array.isArray(sessions)) return undefined;
-  const candidates = sessions.filter(
-    (session): session is ReusableEmptySession =>
-      session !== null &&
-      typeof session === "object" &&
-      !Array.isArray(session) &&
-      typeof session.session_id === "string" &&
-      session.session_id.trim() !== excludedSessionId &&
-      session.message_count === 0 &&
-      session.active_in_window !== true,
-  );
-  return candidates.reduce<ReusableEmptySession | undefined>(
-    (latest, session) =>
-      !latest || (session.created_at ?? 0) > (latest.created_at ?? 0) ? session : latest,
-    undefined,
-  );
-}
-
 /** Read every server page; the TUI gateway filters each page after fetching it. */
 export async function listAllActiveSessions(request: CommandContext["request"]): Promise<unknown[]> {
   const sessions: unknown[] = [];

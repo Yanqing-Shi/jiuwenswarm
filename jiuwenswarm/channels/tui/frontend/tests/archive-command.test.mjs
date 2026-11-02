@@ -5,7 +5,7 @@ import {
   createUnarchiveCommand,
 } from "../dist/core/commands/builtins/archive.js";
 import { createBuiltinCommands } from "../dist/core/commands/registry.js";
-import { findReusableEmptySession, listAllActiveSessions, listAllArchivedSessions } from "../dist/core/commands/helpers.js";
+import { listAllActiveSessions, listAllArchivedSessions } from "../dist/core/commands/helpers.js";
 
 const archiveCommand = createArchiveCommand();
 const unarchiveCommand = createUnarchiveCommand();
@@ -15,21 +15,6 @@ assert.ok(registeredCommands.some((command) => command.name === "unarchive"));
 assert.ok(
   registeredCommands.find((command) => command.name === "unarchive").altNames.includes("restore"),
 );
-assert.equal(
-  findReusableEmptySession(
-    [
-      { session_id: "closing-session", message_count: 0, created_at: 20 },
-      { session_id: "occupied-session", message_count: 0, active_in_window: true, created_at: 30 },
-      { session_id: "conversation", message_count: 3, created_at: 40 },
-      { session_id: "older-empty", message_count: 0, created_at: 10 },
-      { session_id: "newest-empty", message_count: 0, created_at: 15 },
-    ],
-    "closing-session",
-  )?.session_id,
-  "newest-empty",
-);
-assert.equal(findReusableEmptySession([{ session_id: "no-count" }], "closing-session"), undefined);
-
 {
   const pages = [];
   const sessions = await listAllActiveSessions(async (_method, params) => {
@@ -106,13 +91,8 @@ function createContext({
     },
     redirectFromClosedSession: async (sessionId, action) => {
       requests.push({ method: "redirect", params: { sessionId, action } });
-      const reusable = findReusableEmptySession(activeSessions, sessionId);
-      if (reusable) {
-        ctx.sessionId = reusable.session_id;
-      } else {
-        const created = await ctx.request("session.create", {});
-        ctx.sessionId = created.session_id;
-      }
+      const created = await ctx.request("session.create", {});
+      ctx.sessionId = created.session_id;
       return ctx.sessionId;
     },
     setSessionTitle: () => undefined,
@@ -289,8 +269,8 @@ const activeSessions = [
     answers: (step, question) => [{ selected_options: [step === 1 ? question.options[0].label : "Archive session"] }],
   });
   await archiveCommand.action(ctx, "");
-  assert.equal(ctx.sessionId, "existing-empty");
-  assert.equal(requests.some((request) => request.method === "session.create"), false);
+  assert.equal(ctx.sessionId, "fresh-session-1");
+  assert.equal(requests.some((request) => request.method === "session.create"), true);
 }
 
 {
