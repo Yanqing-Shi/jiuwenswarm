@@ -466,7 +466,7 @@ class FeishuChannel(BaseChannel):
         if hasattr(self._message_storage, 'set_platform_adapter'):
             self._message_storage.set_platform_adapter(self._im_platform_adapter)
         # 初始化文件服务
-        from jiuwenswarm.common.utils import get_agent_workspace_dir
+        from gateway.common.paths import get_agent_workspace_dir
         workspace_dir = self.config.temp_file_dir or str(get_agent_workspace_dir())
         self._file_service = FeishuFileService(
             api_client=self._api_client,
@@ -537,7 +537,7 @@ class FeishuChannel(BaseChannel):
                 )
                 # 持久化到配置文件（多应用模式下写入对应 app 条目）
                 try:
-                    from jiuwenswarm.common.config import update_channel_app_field
+                    from gateway.common.config import update_channel_app_field
                     ok = update_channel_app_field(
                         "feishu", self.config.app_id,
                         {"bot_open_id": bot_open_id},
@@ -2088,7 +2088,7 @@ class FeishuChannel(BaseChannel):
         1. 完整绝对路径：/home/xxx/.jiuwenswarm/agent/workspace/xxx.docx
         2. 仅文件名：'xxx.docx' 或 "xxx.docx"——在 workspace 目录下查找
         """
-        from jiuwenswarm.common.utils import get_agent_workspace_dir
+        from gateway.common.paths import get_agent_workspace_dir
         workspace_dir = str(get_agent_workspace_dir())
 
         seen: set[str] = set()
@@ -2696,6 +2696,7 @@ class FeishuChannel(BaseChannel):
             _out_meta = msg.metadata if isinstance(msg.metadata, dict) else {}
             self._user_question_context[request_id] = {
                 "session_id": str(msg.session_id or ""),
+                "interrupt_id": str(payload.get("interrupt_id") or ""),
                 "chat_id": str(
                     _out_meta.get("feishu_chat_id")
                     or msg.chat_id
@@ -2821,7 +2822,7 @@ class FeishuChannel(BaseChannel):
             # V2 多应用：写入对应 app 条目，避免多 app 争抢同一个平铺字段
             if self.config.channel_id == "feishu" and not self.config.bot_key:
                 try:
-                    from jiuwenswarm.common.config import update_channel_app_field
+                    from gateway.common.config import update_channel_app_field
 
                     update_channel_app_field(
                         "feishu",
@@ -2837,7 +2838,7 @@ class FeishuChannel(BaseChannel):
                     pass
             elif self.channel_id.startswith("feishu_enterprise:") and self.config.bot_key:
                 try:
-                    from jiuwenswarm.common.config import (
+                    from gateway.common.config import (
                         update_channel_subsection_in_config,
                     )
 
@@ -3073,6 +3074,7 @@ class FeishuChannel(BaseChannel):
             # 取回提问时的会话上下文，确保答案路由回原会话而不是新建会话
             ctx = self._user_question_context.pop(request_id, None) or {}
             ctx_session_id = str(ctx.get("session_id") or "").strip()
+            interrupt_id = str(ctx.get("interrupt_id") or "")
             ctx_chat_id = str(ctx.get("chat_id") or "").strip()
             ctx_meta = ctx.get("metadata") if isinstance(ctx.get("metadata"), dict) else {}
             if not ctx_session_id:
@@ -3108,6 +3110,7 @@ class FeishuChannel(BaseChannel):
                     "content": "",
                     "query": "",
                     "request_id": request_id,
+                    **({"interrupt_id": interrupt_id} if interrupt_id else {}),
                     "answers": answers,
                     "source": "ask_user_interrupt",
                     "supports_user_interaction": True,

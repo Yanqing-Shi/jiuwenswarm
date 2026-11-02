@@ -6,8 +6,10 @@ import asyncio
 import logging
 
 from openjiuwen_protocol.message import ReqMethod
+
 from gateway.routing.agent_client import DuplicateRequestIdError
 from gateway.routing.e2a_proxy import fetch_agent_unary
+from gateway.common.request_identity import apply_routing_metadata
 
 
 def register_lifecycle_handlers(
@@ -31,7 +33,9 @@ def register_lifecycle_handlers(
             if str(channel.connection_user_id(ws) or "") == str(user_id or "")
         ]
 
-    async def call(method, params, session_id, user_id):
+    async def call(method, params, session_id, user_id, ws=None):
+        routing = getattr(ws, "_web_routing", None)
+        metadata = apply_routing_metadata(None, routing) if isinstance(routing, dict) else None
         return await fetch_agent_unary(
             agent_client=resolve_client(),
             req_method=ReqMethod(method),
@@ -40,18 +44,32 @@ def register_lifecycle_handlers(
             user_id=user_id,
             channel_id=channel.channel_id,
             timeout_seconds=120,
+            metadata=metadata,
         )
 
-    async def watch(user_id):
+    def scope_key(user_id, ws=None):
+        routing = getattr(ws, "_web_routing", None) or {}
+        return (
+            str(user_id or ""),
+            str(routing.get("group_id") or ""),
+            str(routing.get("bot_id") or ""),
+            str(routing.get("gateway_id") or ""),
+        )
+
+    async def watch(user_id, scope):
         revisions = {}
         first = True
         while True:
-            clients = connected_clients(user_id)
+            clients = [
+                client_ws
+                for client_ws in connected_clients(user_id)
+                if scope_key(user_id, client_ws) == scope
+            ]
             if not clients:
                 return
             try:
                 ok, response = await call(
-                    "project.lifecycle", {"events": True}, None, user_id
+                    "project.lifecycle", {"events": True}, None, user_id, clients[0]
                 )
                 if ok:
                     for entry in response.get("events", []):
@@ -75,8 +93,10 @@ def register_lifecycle_handlers(
                             if session_event_clients is not None and entry["event"].startswith("session.")
                             else ([] if session_event_clients is not None else clients)
                         )
-                        for ws in event_clients:
-                            await channel.send_event(ws, entry["event"], payload)
+                        for client_ws in event_clients:
+                            if scope_key(user_id, client_ws) != scope:
+                                continue
+                            await channel.send_event(client_ws, entry["event"], payload)
                             if entry["completed"] and not (
                                 entry["kind"] == "delete"
                                 and entry["event"].startswith("project.")
@@ -88,7 +108,7 @@ def register_lifecycle_handlers(
                                     "delete": "deleted",
                                 }[entry["kind"]]
                                 await channel.send_event(
-                                    ws,
+                                    client_ws,
                                     entry["event"].split(".")[0] + "." + suffix,
                                     {
                                         **entry["result"],
@@ -111,11 +131,11 @@ def register_lifecycle_handlers(
                 )
             await asyncio.sleep(2)
 
-    def ensure_watch(user_id):
-        owner = str(user_id or "")
+    def ensure_watch(user_id, ws=None):
+        owner = scope_key(user_id, ws)
         if owner not in watchers or watchers[owner].done():
             watchers[owner] = asyncio.create_task(
-                watch(owner), name=f"{channel.channel_id}-lifecycle-events"
+                watch(user_id, owner), name="web-lifecycle-events"
             )
 
     channel.ensure_lifecycle_watch = ensure_watch
@@ -152,6 +172,7 @@ def register_lifecycle_handlers(
 
     def handler(method):
         async def handle(ws, req_id, params, session_id, user_id=None):
+            ensure_watch(user_id, ws)
             if not isinstance(params, dict):
                 await channel.send_response(
                     ws,
@@ -181,7 +202,6 @@ def register_lifecycle_handlers(
                 if error is not None:
                     await channel.send_response(ws, req_id, ok=False, error=error, code="BAD_REQUEST")
                     return
-            ensure_watch(user_id)
             # Browser callers cannot inject internal stage acknowledgements.
             public = {}
             for k, v in params.items():
@@ -194,7 +214,7 @@ def register_lifecycle_handlers(
                     "completed_cron_job_ids",
                 }:
                     public[k] = v
-            ok, payload = await call(method, public, session_id, user_id)
+            ok, payload = await call(method, public, session_id, user_id, ws)
             if ok and on_session_deleted is not None and method in {
                 "session.delete",
                 "project.sessions.delete_archived",
@@ -231,6 +251,8 @@ def register_lifecycle_handlers(
                     if item.get("ok", True) and item.get("restored") and item.get("project_id")
                 }
                 for client_ws in connected_clients(user_id):
+                    if scope_key(user_id, client_ws) != scope_key(user_id, ws):
+                        continue
                     for project_id in project_ids:
                         try:
                             await channel.send_event(client_ws, "project.restored", {"project_id": project_id})
@@ -265,6 +287,8 @@ def register_lifecycle_handlers(
                                 if not any(client_ws is ws for client_ws in targets):
                                     targets = [*targets, ws]
                                 for client_ws in targets:
+                                    if scope_key(user_id, client_ws) != scope_key(user_id, ws):
+                                        continue
                                     await send_event(client_ws, event, item)
                 elif "operation_id" not in payload and (method != "project.delete" or payload.get("deleted")):
                     send_event = getattr(channel, "send_event", None)
