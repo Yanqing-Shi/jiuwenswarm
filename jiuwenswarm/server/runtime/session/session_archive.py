@@ -194,9 +194,12 @@ class SessionArchiveService:
                     # Repair fences written by older versions before begin().
                     # Recheck under the execution lock so a live idle probe
                     # cannot lose its fence to recovery in another process.
-                    if value.get("blocked") and not value.get("deleted") and (
-                        not operation or operation.get("status") == "completed"
-                    ):
+                    orphan_fence = (
+                        value.get("blocked")
+                        and not value.get("deleted")
+                        and (not operation or operation.get("status") == "completed")
+                    )
+                    if orphan_fence:
                         active, archived = lc.session_paths(sid)
                         if not active.exists() or archived.exists():
                             continue
@@ -204,16 +207,15 @@ class SessionArchiveService:
                             current = lc.state("session", sid)
                             active, archived = lc.session_paths(sid)
                             current_operation = current.get("operation") or {}
-                            if (
+                            current_orphan_fence = (
                                 current.get("blocked")
                                 and not current.get("deleted")
                                 and (
                                     not current_operation
                                     or current_operation.get("status") == "completed"
                                 )
-                                and active.exists()
-                                and not archived.exists()
-                            ):
+                            )
+                            if current_orphan_fence and active.exists() and not archived.exists():
                                 lc.set_visibility("session", sid, blocked=False)
                         continue
                     if not operation or operation.get("status") in {
