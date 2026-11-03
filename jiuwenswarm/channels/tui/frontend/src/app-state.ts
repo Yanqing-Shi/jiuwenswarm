@@ -337,9 +337,12 @@ export class CliPiAppState {
   private bootSessionStart: (() => void) | null = null;
   /** 启动会话创建完成前，后续命令与 chat 帧统一排队到该 Promise。 */
   private bootSessionCreation: Promise<void> | null = null;
+  private bootResolvedSessionId: string | null = null;
   /** 普通启动的幂等创建 token；重连期间保持稳定。 */
   private readonly bootCreateToken = generateCreateToken();
   private mode: ClientMode = "agent.code.normal";
+  private modeUnconfirmedSessionId: string | null = null;
+  private modeSyncInFlight: Promise<void> | null = null;
   private themeName: ThemeName = getCurrentThemeName();
   private accentColor: AccentColorName = getCurrentAccentColor();
   private transcriptMode: "compact" | "detailed" = "compact";
@@ -1235,6 +1238,7 @@ export class CliPiAppState {
 
   getCommandContext(): CommandContext {
     const snapshot = this.getSnapshot();
+    const bootSessionCreation = this.bootSessionCreation;
     const toolGroupIds = getToolGroupIds(snapshot.entries, snapshot.toolExecutions);
     return {
       version: snapshot.modelInfo.version || "",
@@ -1243,6 +1247,13 @@ export class CliPiAppState {
       askQuestions: this.askQuestions,
       sendMessage: this.sendMessage,
       sessionId: snapshot.sessionId,
+      resolveModeSessionId: async () => {
+        if (!bootSessionCreation) return snapshot.sessionId;
+        await bootSessionCreation;
+        return this.bootResolvedSessionId ?? snapshot.sessionId;
+      },
+      getCurrentSessionId: () => this.sessionId,
+      getCurrentMode: () => this.mode,
       preferredLanguage: snapshot.preferredLanguage,
       entries: snapshot.entries,
       teamMessageEvents: snapshot.teamMessageEvents,
@@ -1267,6 +1278,8 @@ export class CliPiAppState {
       connectionStatus: snapshot.connectionStatus,
       mode: snapshot.mode,
       setMode: this.setMode,
+      markModeUnconfirmed: this.markModeUnconfirmed,
+      markModeConfirmed: this.markModeConfirmed,
       markPlanEntryFromSlashCommand: this.markPlanEntryFromSlashCommand,
       setModel: this.setModel,
       setSelectedAgentosModel: this.setSelectedAgentosModel,
@@ -1914,6 +1927,10 @@ export class CliPiAppState {
   };
 
   readonly updateSession = (newId: string): void => {
+    if (this.sessionId !== newId) {
+      this.modeUnconfirmedSessionId = null;
+      this.modeSyncInFlight = null;
+    }
     this.sessionId = newId;
     this.lastVisibleUserRequest = null;
     this.usageByModel.clear();
@@ -2134,6 +2151,52 @@ export class CliPiAppState {
     }
   };
 
+  readonly markModeUnconfirmed = (): void => {
+    this.modeUnconfirmedSessionId = this.sessionId;
+  };
+
+  readonly markModeConfirmed = (): void => {
+    if (this.modeUnconfirmedSessionId === this.sessionId) {
+      this.modeUnconfirmedSessionId = null;
+    }
+  };
+
+  isModeUnconfirmed(): boolean {
+    return this.modeUnconfirmedSessionId === this.sessionId;
+  }
+
+  private blockChatUntilModeConfirmed(): boolean {
+    if (!this.isModeUnconfirmed()) return false;
+    this.addItem(
+      addError(this.sessionId, "Mode switch is unconfirmed; syncing before chat. Please resend after confirmation."),
+    );
+    this.synchronizeUnconfirmedMode();
+    return true;
+  }
+
+  private synchronizeUnconfirmedMode(): void {
+    if (this.modeSyncInFlight) return;
+    const sessionId = this.sessionId;
+    const sync = this.request<{ mode: string }>("mode.get", { session_id: sessionId })
+      .then((state) => {
+        const mode = normalizeToClientMode(state.mode);
+        if (!mode) throw new Error("mode.get returned an unsupported mode");
+        if (this.sessionId !== sessionId) return;
+        this.setMode(mode);
+        this.markModeConfirmed();
+        this.addItem(addInfo(sessionId, "Mode synchronized. Please resend your message.", "m"));
+      })
+      .catch((error) => {
+        if (this.sessionId !== sessionId) return;
+        const message = error instanceof Error ? error.message : String(error);
+        this.addItem(addError(sessionId, `Mode sync failed: ${message}`));
+      })
+      .finally(() => {
+        if (this.modeSyncInFlight === sync) this.modeSyncInFlight = null;
+      });
+    this.modeSyncInFlight = sync;
+  }
+
   readonly markPlanEntryFromSlashCommand = (): void => {
     this.pendingPlanEntrySource = PLAN_ENTRY_SOURCE_SLASH_COMMAND;
   };
@@ -2269,6 +2332,7 @@ export class CliPiAppState {
     skills?: string[],
   ): string | null => {
     if (this.connectionStatus !== "connected") return null;
+    if (this.blockChatUntilModeConfirmed()) return null;
     const mode = modeOverride ?? this.mode;
     const planEntrySource = isPlanClientMode(mode) ? this.pendingPlanEntrySource : null;
     const params = {
@@ -2334,6 +2398,7 @@ export class CliPiAppState {
 
   supplement(content: string, attachments?: FileAttachment[]): string | null {
     if (this.connectionStatus !== "connected") return null;
+    if (this.blockChatUntilModeConfirmed()) return null;
     const trimmed = content.trim();
     if (!trimmed) return null;
     // Same pre-check as sendMessage: reject oversized frames.
@@ -3660,6 +3725,7 @@ export class CliPiAppState {
       }
       const placeholderId = this.sessionId;
       const pendingVisibleRequest = this.lastVisibleUserRequest;
+      this.bootResolvedSessionId = createdId;
       this.updateSession(createdId);
       if (target === null && placeholderId !== createdId) {
         this.entries = this.entries.map((entry) =>

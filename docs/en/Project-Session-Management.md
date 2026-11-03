@@ -11,6 +11,8 @@ The Web channel provides project-scoped session management. Sessions bind to pro
 
 The current implementation adds a `work_mode` dimension to isolate regular work collaboration from code projects. `code` projects support Git status, branch operations, Diff snapshots, live Diff monitoring, and discarding/redoing the last turn's file changes. `work` projects keep the regular project/session behavior.
 
+TUI `/mode` can switch the current execution mode within one Session ID. `metadata.mode` identifies the current executor and work/code profile; `work_mode` remains the original project index. A mode switch does not move history or change `project_id`, `project_dir`, or `work_mode`. Only an explicit project rebind changes that ownership.
+
 ### Core Concepts
 
 | Concept | Description |
@@ -20,7 +22,7 @@ The current implementation adds a `work_mode` dimension to isolate regular work 
 | **Code project Git capabilities** | Real `code` projects expose Git status, init, branch, Diff, history, monitoring, and discard/redo APIs. Default projects and `work` projects do not expose Git operations |
 | **Pinned sessions** | Detached from project groups and fetched via `project.pinned_sessions`, sorted by `pin_order` ascending |
 | **Pinned projects** | Pinned projects appear first, sorted by `pin_order` ascending |
-| **Immutability** | Once `project_id`, `project_dir`, and `work_mode` are bound to a session, they cannot be changed; no cross-project/cross-mode migration API is provided |
+| **Project binding** | TUI `/mode` preserves the bound `project_id`, `project_dir`, and `work_mode`; project rebinding uses a separate entry point |
 
 ### Communication Convention
 
@@ -103,14 +105,14 @@ Returned by `project.get_sessions` / `project.pinned_sessions`.
 
 ### Mode Values
 
+TUI mode switches store these canonical values; older sessions can still contain legacy aliases.
+
 | Value | Description |
 |-------|-------------|
-| `agent.plan` | Agent planning mode |
-| `agent.fast` | Agent fast mode |
-| `code.plan` | Code planning mode |
-| `code.normal` | Code normal mode |
-| `code.team` | Code team mode |
-| `team` | Team mode |
+| `agent.work.normal` / `agent.work.plan` | Work Agent normal / planning mode |
+| `agent.code.normal` / `agent.code.plan` | Code Agent normal / planning mode |
+| `team.work.normal` / `team.work.plan` | Work Team normal / planning mode |
+| `team.code.normal` / `team.code.plan` | Code Team normal / planning mode |
 
 ---
 

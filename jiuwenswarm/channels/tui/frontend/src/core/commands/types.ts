@@ -50,6 +50,12 @@ export interface CommandContext {
     skills?: string[],
   ) => string | null;
   sessionId: string;
+  /** Resolve the startup Session before pinning a command to it. */
+  resolveModeSessionId?: () => Promise<string>;
+  /** Read the live Session ID after an asynchronous command request. */
+  getCurrentSessionId?: () => string;
+  /** Read the mode after startup has resolved the Session. */
+  getCurrentMode?: () => ClientMode;
   preferredLanguage: PreferredLanguage;
   entries: HistoryItem[];
   /** Sidechain / team messages (not part of main conversation entries) */
@@ -79,6 +85,8 @@ export interface CommandContext {
   connectionStatus: ConnectionStatus;
   mode: ClientMode;
   setMode: (mode: ClientMode) => void;
+  markModeUnconfirmed?: () => void;
+  markModeConfirmed?: () => void;
   markPlanEntryFromSlashCommand?: () => void;
   setModel: (name: string) => void;
   /** 全局选中 agentos 备份模型（请求级注入）；传 null 清空，恢复启动默认。

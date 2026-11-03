@@ -114,6 +114,8 @@ CLI_FORWARD_REQ_METHODS = frozenset(
         "swarmflow.stop",
         "command.status",
         "command.goal",
+        "mode.set",
+        "mode.get",
         "chat.send",
         "chat.interrupt",
         "chat.resume",
@@ -234,6 +236,8 @@ CLI_FORWARD_REQ_METHODS = frozenset(
 
 CLI_FORWARD_NO_LOCAL_HANDLER_METHODS = frozenset(
     {
+        "mode.set",
+        "mode.get",
         "command.add_dir",
         "command.btw",
         "command.chrome",

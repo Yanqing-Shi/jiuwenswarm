@@ -210,10 +210,13 @@ jiuwenswarm-tui --session "$(printf 'a%.0s' {1..200})"  # 超 128 → 长度超�
 
 - **`/mode`**（`mode.ts`）  
   - 无参数：显示当前模式。  
-  - TUI 当前接受：`agent`、`plan`、`agent.plan`、`agent.fast`、`code`、`code.normal`、`code.team`、`team`、`team.normal`。
-  - 实际映射：`agent` / `plan` → `agent.plan`；`code` → `code.normal`；`team.normal` → `team`；其它直达值保持不变。
-  - 切换时会尝试调用 `mode.set` RPC，同时更新本地 UI 状态；如果后端不支持 `mode.set`，TUI 仍会在后续发送消息时通过当前模式传递。
-  - 从 `team` / `code.team` 离开 Team 族且当前有 Team 任务运行时，TUI 会先弹出确认，确认后发送 `chat.interrupt` 再切换。
+  - 主要入口：`agent.work`、`agent.code`、`team.work`、`team.code`；也接受完整的 `.normal` canonical 值和旧别名 `agent`、`code`、`team`、`agent.fast`、`code.normal`、`code.team`、`team.normal`。
+  - `plan`、`agent.plan`、`code.plan`、`team.plan` 等别名映射到对应的 `.plan` 模式；`agent` 映射到 `agent.work.normal`。
+  - 切换时先调用 `mode.set`；服务端确认后才更新 UI 和后续消息的模式。响应超时或 AgentServer 连接中断时会按同一目标重试一次；重试仍无明确结果时读取权威 `mode.get`。若另一 TUI 已切换同一会话而产生模式冲突，当前 TUI 会读取并显示服务端模式。若读取失败，会提示切换状态未确认；下一条聊天先同步模式，不发送消息，输入和附件引用保留在编辑器中。同步完成后按 Enter 重发。
+  - 若在模式请求等待期间切到另一会话，后续重试和核对仍针对原会话，旧请求的结果不会改变新会话的模式显示。
+  - 有任务、工具调用或待答交互仍在运行时，服务端拒绝切换。请先单独完成或取消任务，待其收尾后重试；`/mode` 不自动中断任务。
+  - 同一 Session ID 的历史默认仍归入创建时的项目索引。切换 work/code 执行模式不会改变原项目或移动历史；只有用户明确重绑项目才改变索引。不同执行者的模型上下文尚不自动继承。
+  - `/swarmflow on` 会在启动会话恢复完成后按当前模式决定是否切换；已处于 `team.code` 等 Team 模式时保持该模式。确实切到 Team 后若配置写入失败，会尝试恢复切换前的实际模式；若恢复未获服务端确认，错误消息会提示手动重试 `/mode`。
 - **与 Gateway 受控通道的差异**：受控通道只接受 `/mode agent|code|team|agent.plan|agent.fast|code.normal|code.team`；`/mode plan`、`/mode team.normal` 是 TUI 本地命令能力，不属于 Gateway slash 白名单。
 - **同族子模式**：可用 **`/mode agent.fast`**、**`/mode code.normal`**、**`/mode code.team`** 等直达；**`/switch plan|fast|normal|team`** 在 `switch.ts` 中实现，但 **默认 TUI 注册表未注册**。
 

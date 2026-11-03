@@ -53,4 +53,10 @@ Top-level commands from `createBuiltinCommands()` in `jiuwenswarm/channels/tui/f
 | `/swarmflow` | - | SwarmFlow toggle / status / budget (`on` / `off` / `--budget`) | `/swarmflow on` | **Recommended `team`** |
 | `/swarmflows` | `/swarmworkflows` | Full-screen SwarmFlow run tree | `/swarmflows` | **Recommended `team`** (requires `/swarmflow on`) |
 
+`/mode` commits the mode through `mode.set` before updating the TUI. A response timeout or AgentServer connection loss triggers one retry; if the retry is inconclusive, the TUI reads the authoritative mode through `mode.get`. If another TUI has switched the same session, a mode conflict makes this TUI read and display the server's mode. If that read fails, the switch is marked unconfirmed. The next chat waits for mode synchronization without sending the message; its text and attachment references stay in the editor. Press Enter after confirmation. An active task, tool call, or pending interaction blocks the switch. Finish or cancel that work separately, then retry. The same Session ID and its history remain in the original project index when switching between work and code; only an explicit project rebind changes that index. Model context is not yet transferred between different executors.
+
+If you open another session while a mode request is pending, its retries and status checks still target the original session. The pending result does not change the new session's displayed mode.
+
+After a session is restored, `/swarmflow on` uses its current mode. It keeps an existing Team mode such as `team.code`. If it switches to Team and the config write then fails, the TUI attempts to restore the actual previous mode. An unconfirmed rollback is reported explicitly.
+
 > SwarmFlow walkthrough: **[TUI SwarmFlow Guide](TUISwarmFlowGuide.md)**.

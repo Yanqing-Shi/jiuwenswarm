@@ -57,6 +57,8 @@ def _ensure_req_method(name: str, value: str) -> None:
 
 
 _ensure_req_method("PROMPT_SUGGESTION_CANCEL", "prompt_suggestion.cancel")
+_ensure_req_method("MODE_SET", "mode.set")
+_ensure_req_method("MODE_GET", "mode.get")
 _ensure_req_method("RECOMMENDATION", "recommendation.job")
 # Dispatch compares this member on every request. The pinned protocol package
 # does not define it, so a missing attribute fails chat and session creation

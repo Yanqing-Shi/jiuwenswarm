@@ -45,8 +45,8 @@ from openjiuwen_protocol.message import (
     TOPIC_STARTERS_READY_EVENT,
     Message,
     Mode,
-    ReqMethod,
 )
+from jiuwenswarm.common.schema.message import ReqMethod
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 
 from gateway.common.media_capability_config import (
