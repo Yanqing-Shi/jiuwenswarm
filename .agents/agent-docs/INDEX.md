@@ -1,7 +1,7 @@
 ---
 title: D/F/B/S 文档总索引
-author: MengHan18
-author_email: hanmeng22@huawei.com
+author: kdgmpw
+author_email: lishuqi4@huawei.com
 generated: true
 ---
 
@@ -9,7 +9,7 @@ generated: true
 
 由 sync_documents.py 从文档 frontmatter 自动生成；请修改源文档后重新生成，不手工维护。
 
-共 29 篇文档，按模块分组；跨模块文档在各相关分组展示，总数按文档去重。
+共 30 篇文档，按模块分组；跨模块文档在各相关分组展示，总数按文档去重。
 
 ## 模块导航
 
@@ -19,7 +19,7 @@ generated: true
 | [agent_teams/workflow](#module-2) | 3 |
 | [gateway/channel_manager/im_platforms/xiaoyi](#module-3) | 1 |
 | [gateway/channel_manager/tui](#module-4) | 1 |
-| [gateway/channel_manager/web](#module-5) | 2 |
+| [gateway/channel_manager/web](#module-5) | 3 |
 | [gateway/message_handler](#module-6) | 1 |
 | [jiuwenswarm](#module-7) | 3 |
 | [jiuwenswarm/agents/harness/code/rails/heartbeat](#module-8) | 1 |
@@ -32,9 +32,10 @@ generated: true
 | [jiuwenswarm/gateway/channel_manager/web](#module-15) | 1 |
 | [jiuwenswarm/observability](#module-16) | 1 |
 | [jiuwenswarm/server/runtime/agent_adapter](#module-17) | 4 |
-| [tests/unit_tests/gateway](#module-18) | 1 |
-| [tests/unit_tests/personal_context](#module-19) | 1 |
-| [未分类](#module-20) | 12 |
+| [jiuwenswarm/server/runtime/session](#module-18) | 1 |
+| [tests/unit_tests/gateway](#module-19) | 1 |
+| [tests/unit_tests/personal_context](#module-20) | 1 |
+| [未分类](#module-21) | 12 |
 
 <a id="module-1"></a>
 
@@ -68,7 +69,7 @@ generated: true
 
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
-| [B_20261031_1340_draft-dispatch-lifecycle-events](bugfix/jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway/channel_manager/web | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/helpers.ts, jiuwenswarm/channels/tui/frontend/tests/draft-session.test.mjs, jiuwenswarm/channels/tui/frontend/tests/archive-command.test.mjs, jiuwenswarm/channels/tui/frontend/tests/delete-command.test.mjs, gateway/channel_manager/tui/tui_connect.py, gateway/channel_manager/web/lifecycle_handlers.py | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
+| [B_20261031_1340_draft-dispatch-lifecycle-events](bugfix/jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway/channel_manager/web, jiuwenswarm/server/runtime/session | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/helpers.ts, jiuwenswarm/channels/tui/frontend/tests/draft-session.test.mjs, jiuwenswarm/channels/tui/frontend/tests/archive-command.test.mjs, jiuwenswarm/channels/tui/frontend/tests/delete-command.test.mjs, gateway/channel_manager/tui/tui_connect.py, gateway/channel_manager/web/lifecycle_handlers.py, jiuwenswarm/server/runtime/session/lifecycle.py, jiuwenswarm/server/runtime/session/session_archive.py, tests/unit_tests/server/test_archive_lifecycle.py | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
 
 <a id="module-5"></a>
 
@@ -77,7 +78,8 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
 | [F_20261031_1139_gateway-session-e2a](features/F_20261031_1139_gateway-session-e2a.md) | F | Web 会话管理统一经 E2A 交由 Server 执行 | ruiqiang2 | gateway/channel_manager/web | gateway/channel_manager/web/app_web_handlers.py, tests/unit_tests/gateway/test_app_web_handlers.py | 无独立 D：用户确认的 Gateway 解耦任务 4.1，沿用 develop 个人版现有链路，无独立设计编号。 |
-| [B_20261031_1340_draft-dispatch-lifecycle-events](bugfix/jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway/channel_manager/web | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/helpers.ts, jiuwenswarm/channels/tui/frontend/tests/draft-session.test.mjs, jiuwenswarm/channels/tui/frontend/tests/archive-command.test.mjs, jiuwenswarm/channels/tui/frontend/tests/delete-command.test.mjs, gateway/channel_manager/tui/tui_connect.py, gateway/channel_manager/web/lifecycle_handlers.py | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
+| [B_20261031_1340_draft-dispatch-lifecycle-events](bugfix/jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway/channel_manager/web, jiuwenswarm/server/runtime/session | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/helpers.ts, jiuwenswarm/channels/tui/frontend/tests/draft-session.test.mjs, jiuwenswarm/channels/tui/frontend/tests/archive-command.test.mjs, jiuwenswarm/channels/tui/frontend/tests/delete-command.test.mjs, gateway/channel_manager/tui/tui_connect.py, gateway/channel_manager/web/lifecycle_handlers.py, jiuwenswarm/server/runtime/session/lifecycle.py, jiuwenswarm/server/runtime/session/session_archive.py, tests/unit_tests/server/test_archive_lifecycle.py | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
+| [B_20261102_1644_cron-web-default-project-id](bugfix/gateway/channel_manager/B_20261102_1644_cron-web-default-project-id.md) | B | 前端未选项目创建定时任务落库 project_id 回退为空串 | kdgmpw | gateway/channel_manager/web | gateway/channel_manager/web/app_web_handlers.py, jiuwenswarm/channels/web/frontend/src/components/CronPanel/cronProjectDisplay.ts, tests/unit_tests/gateway/test_app_web_handlers.py | 无独立 D：恢复 4b00671f6（#5713）已实现的行为，属于对该修复在企业版合入后被回退的局部回归修复，无独立设计。 |
 
 <a id="module-6"></a>
 
@@ -137,7 +139,7 @@ generated: true
 
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
-| [B_20261031_1340_draft-dispatch-lifecycle-events](bugfix/jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway/channel_manager/web | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/helpers.ts, jiuwenswarm/channels/tui/frontend/tests/draft-session.test.mjs, jiuwenswarm/channels/tui/frontend/tests/archive-command.test.mjs, jiuwenswarm/channels/tui/frontend/tests/delete-command.test.mjs, gateway/channel_manager/tui/tui_connect.py, gateway/channel_manager/web/lifecycle_handlers.py | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
+| [B_20261031_1340_draft-dispatch-lifecycle-events](bugfix/jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway/channel_manager/web, jiuwenswarm/server/runtime/session | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/helpers.ts, jiuwenswarm/channels/tui/frontend/tests/draft-session.test.mjs, jiuwenswarm/channels/tui/frontend/tests/archive-command.test.mjs, jiuwenswarm/channels/tui/frontend/tests/delete-command.test.mjs, gateway/channel_manager/tui/tui_connect.py, gateway/channel_manager/web/lifecycle_handlers.py, jiuwenswarm/server/runtime/session/lifecycle.py, jiuwenswarm/server/runtime/session/session_archive.py, tests/unit_tests/server/test_archive_lifecycle.py | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
 
 <a id="module-13"></a>
 
@@ -187,13 +189,21 @@ generated: true
 
 <a id="module-18"></a>
 
+## jiuwenswarm/server/runtime/session
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [B_20261031_1340_draft-dispatch-lifecycle-events](bugfix/jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway/channel_manager/web, jiuwenswarm/server/runtime/session | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/helpers.ts, jiuwenswarm/channels/tui/frontend/tests/draft-session.test.mjs, jiuwenswarm/channels/tui/frontend/tests/archive-command.test.mjs, jiuwenswarm/channels/tui/frontend/tests/delete-command.test.mjs, gateway/channel_manager/tui/tui_connect.py, gateway/channel_manager/web/lifecycle_handlers.py, jiuwenswarm/server/runtime/session/lifecycle.py, jiuwenswarm/server/runtime/session/session_archive.py, tests/unit_tests/server/test_archive_lifecycle.py | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
+
+<a id="module-19"></a>
+
 ## tests/unit_tests/gateway
 
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
 | [B_20261031_1038_cron-migration-ut](bugfix/tests/unit_tests/B_20261031_1038_cron-migration-ut.md) | B | cron 会话迁移的实时流测试与类清点兼容修复 | kdgmpw | tests/unit_tests/gateway, tests/unit_tests/personal_context | tests/unit_tests/gateway/test_cron_live_bus.py, tests/unit_tests/personal_context/test_closed_class_inventory.py | 无独立 D：对现有测试契约和解释器兼容性的小范围修复，无独立设计。 |
 
-<a id="module-19"></a>
+<a id="module-20"></a>
 
 ## tests/unit_tests/personal_context
 
@@ -201,7 +211,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261031_1038_cron-migration-ut](bugfix/tests/unit_tests/B_20261031_1038_cron-migration-ut.md) | B | cron 会话迁移的实时流测试与类清点兼容修复 | kdgmpw | tests/unit_tests/gateway, tests/unit_tests/personal_context | tests/unit_tests/gateway/test_cron_live_bus.py, tests/unit_tests/personal_context/test_closed_class_inventory.py | 无独立 D：对现有测试契约和解释器兼容性的小范围修复，无独立设计。 |
 
-<a id="module-20"></a>
+<a id="module-21"></a>
 
 ## 未分类
 

@@ -146,7 +146,9 @@ export function createDeleteCommand(): SlashCommand {
         });
         if ((payload.failed_count ?? 0) > 0 || (payload.succeeded_count ?? 0) !== 1) {
           const result = payload.results?.find((item) => item.session_id === selected.session.session_id);
-          const detail = result?.error || result?.code ||
+          const detail = result?.code === "SESSION_BUSY"
+            ? t("session is busy; stop its current run before deleting", "会话正在运行；请先停止该会话任务再删除")
+            : result?.error || result?.code ||
             t("the server did not confirm the operation", "服务端未确认删除操作");
           throw new Error(t(
             `delete failed for ${selected.session.session_id}: ${detail}`,

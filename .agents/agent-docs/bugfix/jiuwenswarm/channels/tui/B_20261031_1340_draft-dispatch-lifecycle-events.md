@@ -8,6 +8,7 @@ modules:
   - jiuwenswarm/channels/tui/frontend
   - gateway/channel_manager/tui
   - gateway/channel_manager/web
+  - jiuwenswarm/server/runtime/session
 files:
   - jiuwenswarm/channels/tui/frontend/src/app-state.ts
   - jiuwenswarm/channels/tui/frontend/src/core/commands/helpers.ts
@@ -16,6 +17,9 @@ files:
   - jiuwenswarm/channels/tui/frontend/tests/delete-command.test.mjs
   - gateway/channel_manager/tui/tui_connect.py
   - gateway/channel_manager/web/lifecycle_handlers.py
+  - jiuwenswarm/server/runtime/session/lifecycle.py
+  - jiuwenswarm/server/runtime/session/session_archive.py
+  - tests/unit_tests/server/test_archive_lifecycle.py
 designs: []
 design_note: Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document.
 ---
@@ -60,3 +64,13 @@ design_note: Narrow repair of the TUI draft and session lifecycle behavior in PR
 此恢复依赖当前 TUI 进程仍运行，以及 AgentServer 内存中的 `create_token` 映射。若 AgentServer 重启并丢失映射，重试可能得到新 ID，无法凭该 token 找到旧的空会话；TUI 退出后也不再重试。删除受理后的最终清理仍由服务端生命周期任务负责，本地用例不证明磁盘文件已经移除。
 
 本次用 WorkSwarm 附带的 Node 构建并运行上述四个 TUI 测试脚本，均通过；新增用例覆盖切换前后超时、断线后重连、相同 token/参数重试和旧消息不转发。另在 Python 3.14 环境定向运行服务端 `test_persist_session_is_create_identity_but_not_warm_key`，1 项通过，证实同一进程内相同 token 复用领取结果。未执行真实断线联调或物理删除完成验证。
+
+## 后续复查：非当前会话删除失败提示
+
+`/delete` 删除非当前但正在运行的会话时，服务端批量结果返回 `SESSION_BUSY`，此前 TUI 直接拼接服务端英文错误。现按错误码展示中英文可操作提示，并保留其他错误的原有回退路径。`delete-command.test.mjs` 增加中文场景，确认错误提示不含服务端英文且不发生会话重定向。基于 `cdf456f91` 与上游 `b825ac938` 的未提交合并工作区，用 WorkSwarm 自带 Node 22.11.0 临时转译改动文件后运行该脚本，通过；原有 `dist` 文件已恢复。
+
+## 后续复查：未受理的 idle 检查不产生关闭事件
+
+归档或删除的 idle 检查先建立执行围栏与 `check_idle` operation；这一步尚未受理用户操作。旧逻辑将这个阶段当作已归档，并在 `SESSION_BUSY` 时用普通 `completed` 结束 operation，Gateway 轮询据此发出错误的 `session.archived` 或 `session.deleted` 事件，TUI 可能离开仍可用的会话。
+
+现在 `check_idle` 不参与归档可见性或生命周期事件投影。探测失败和重启恢复均以同一次状态写入释放围栏，并记录 `phase=not_accepted`、`result.accepted=false`；事件快照跳过未受理记录，包括旧版本留下的已完成 `check_idle` 记录。成功通过探测后才进入可发布的操作阶段。基于 `cdf456f91` 与 `b825ac938` 的未提交合并工作区，完整运行 `test_archive_lifecycle.py` 和 `test_lifecycle_handlers.py`，114 项通过；回归覆盖探测期间的活跃/归档列表、busy 拒绝后两轮 Gateway 轮询、重启恢复和正常完成事件。

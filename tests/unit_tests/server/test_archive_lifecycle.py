@@ -412,10 +412,16 @@ async def test_running_session_cannot_be_archived_or_deleted(archive):
     assert (root / "sessions/sess_a").exists()
     assert not (root / "sessions_archived/sess_a").exists()
     assert lc.state("session", "sess_a").get("blocked") is False
+    assert lc.state("session", "sess_a")["operation"]["status"] == "completed"
+    assert lc.state("session", "sess_a")["operation"]["result"] == {"accepted": False}
 
     runtime.is_session_running.return_value = False
     await service.session("sess_a", "archive", "web")
     assert (root / "sessions_archived/sess_a").exists()
+    assert any(
+        entry["kind"] == "archive" and entry["completed"]
+        for entry in lc.event_snapshots()
+    )
 
     create("sess_b")
     runtime.is_session_running.return_value = True
@@ -424,12 +430,161 @@ async def test_running_session_cannot_be_archived_or_deleted(archive):
     assert error.value.code == "SESSION_BUSY"
     assert (root / "sessions/sess_b").exists()
     assert lc.state("session", "sess_b").get("blocked") is False
+    assert lc.state("session", "sess_b")["operation"]["status"] == "completed"
+    assert lc.state("session", "sess_b")["operation"]["result"] == {"accepted": False}
     runtime.delete_session.assert_not_awaited()
 
     runtime.is_session_running.return_value = False
     deleted = await service.session("sess_b", "delete", "web")
     assert deleted["ok"] is True
     runtime.delete_session.assert_awaited_once()
+    assert any(
+        entry["kind"] == "delete" and entry["completed"]
+        for entry in lc.event_snapshots()
+    )
+
+
+@pytest.mark.asyncio
+async def test_idle_probe_begin_failure_does_not_leave_a_fence(archive, monkeypatch):
+    service, create, _, _ = archive
+    create()
+
+    def fail_begin(*args, **kwargs):
+        raise lc.LifecycleError("NOT_FOUND", "resource was permanently deleted")
+
+    monkeypatch.setattr(lc, "begin", fail_begin)
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("sess_a", "archive", "web")
+
+    assert error.value.code == "NOT_FOUND"
+    assert lc.state("session", "sess_a").get("blocked") is not True
+    lc.guard("sess_a")
+
+
+@pytest.mark.asyncio
+async def test_idle_probe_fence_has_recoverable_operation(archive):
+    service, create, _, runtime = archive
+    create()
+
+    def running_probe(session_id):
+        value = lc.state("session", session_id)
+        operation = value["operation"]
+        assert operation["phase"] == "check_idle"
+        assert not lc.logically_archived(value)
+        assert lc.projection("session", session_id, value=value)["lifecycle_operation"] is None
+        assert service.list_sessions({})["sessions"] == []
+        inventory = service.project_session_inventory("default")
+        assert len(inventory) == 1
+        assert inventory[0].active and not inventory[0].logically_archived
+        assert lc.event_snapshots() == []
+        with pytest.raises(lc.LifecycleError) as error:
+            lc.guard(session_id)
+        assert error.value.code == "OPERATION_IN_PROGRESS"
+        return True
+
+    runtime.is_session_running.side_effect = running_probe
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("sess_a", "archive", "web")
+
+    assert error.value.code == "SESSION_BUSY"
+    assert lc.state("session", "sess_a")["operation"]["status"] == "completed"
+    assert lc.state("session", "sess_a")["operation"]["phase"] == "not_accepted"
+    assert lc.event_snapshots() == []
+    lc.guard("sess_a")
+
+
+@pytest.mark.asyncio
+async def test_recovery_clears_orphan_idle_fence(archive):
+    service, create, root, _ = archive
+    create()
+    lc.set_visibility("session", "sess_a", blocked=True, write_blocked=False)
+
+    service.start_recovery()
+    await _wait_until(lambda: lc.state("session", "sess_a").get("blocked") is False)
+
+    assert (root / "sessions/sess_a").exists()
+    lc.guard("sess_a")
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_aborts_unaccepted_idle_check(archive):
+    service, create, root, _ = archive
+    create()
+    lc.begin("session", "sess_a", "archive", initial_phase="check_idle")
+
+    service.start_recovery()
+    await _wait_until(
+        lambda: lc.state("session", "sess_a")["operation"]["status"] == "completed"
+    )
+
+    assert lc.state("session", "sess_a")["blocked"] is False
+    assert lc.state("session", "sess_a")["operation"]["result"] == {"accepted": False}
+    assert lc.event_snapshots() == []
+    assert (root / "sessions/sess_a").exists()
+    assert not (root / "sessions_archived/sess_a").exists()
+    lc.guard("sess_a")
+    await service.close()
+
+
+def test_legacy_completed_idle_check_does_not_emit_terminal_event(archive):
+    _, create, _, _ = archive
+    create()
+    lc.begin("session", "sess_a", "archive", initial_phase="check_idle")
+    lc.complete("session", "sess_a")
+
+    assert lc.event_snapshots() == []
+    assert not lc.logically_archived(lc.state("session", "sess_a"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["archive", "delete"])
+async def test_busy_rejection_does_not_emit_completion_on_gateway_poll(
+    archive, monkeypatch, action
+):
+    from gateway.channel_manager.web import lifecycle_handlers
+
+    service, create, _, runtime = archive
+    create()
+    runtime.is_session_running.return_value = True
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("sess_a", action, "web")
+    assert error.value.code == "SESSION_BUSY"
+
+    client = object()
+    events = []
+    channel = SimpleNamespace(
+        channel_id="web",
+        clients=[client],
+        connection_user_id=lambda ws: "u1",
+        register_method=lambda name, handler: None,
+        send_event=AsyncMock(side_effect=lambda ws, event, payload: events.append(event)),
+        send_response=AsyncMock(),
+        clear_session_busy=Mock(),
+    )
+    polls = 0
+    original_sleep = asyncio.sleep
+
+    async def fetch(**kwargs):
+        nonlocal polls
+        polls += 1
+        return True, {"events": lc.event_snapshots()}
+
+    async def after_poll(delay):
+        if polls >= 2:
+            channel.clients.clear()
+        await original_sleep(0)
+
+    monkeypatch.setattr(lifecycle_handlers, "fetch_agent_unary", fetch)
+    monkeypatch.setattr(lifecycle_handlers.asyncio, "sleep", after_poll)
+    lifecycle_handlers.register_lifecycle_handlers(channel, lambda: None, lambda: None)
+    channel.ensure_lifecycle_watch("u1")
+    watcher = next(task for task in asyncio.all_tasks() if task.get_name() == "web-lifecycle-events")
+    await asyncio.wait_for(watcher, 1)
+
+    assert polls == 2
+    assert events == []
+    channel.clear_session_busy.assert_not_called()
 
 
 @pytest.mark.parametrize("state", ["queued", "running", "waiting_for_control", "succeeded", "failed", "cancelled"])

@@ -185,10 +185,37 @@ class SessionArchiveService:
                         continue
                     cached = parsed.get(path.name)
                     if cached is not None and cached[0] == stamp:
-                        operation = cached[1]
+                        value = cached[1]
                     else:
-                        operation = lc.read_json(path).get("operation") or {}
-                        parsed[path.name] = (stamp, operation)
+                        value = lc.read_json(path)
+                        parsed[path.name] = (stamp, value)
+                    operation = value.get("operation") or {}
+                    sid = path.stem.removeprefix("session_")
+                    # Repair fences written by older versions before begin().
+                    # Recheck under the execution lock so a live idle probe
+                    # cannot lose its fence to recovery in another process.
+                    if value.get("blocked") and not value.get("deleted") and (
+                        not operation or operation.get("status") == "completed"
+                    ):
+                        active, archived = lc.session_paths(sid)
+                        if not active.exists() or archived.exists():
+                            continue
+                        async with self.lock("session", sid):
+                            current = lc.state("session", sid)
+                            active, archived = lc.session_paths(sid)
+                            current_operation = current.get("operation") or {}
+                            if (
+                                current.get("blocked")
+                                and not current.get("deleted")
+                                and (
+                                    not current_operation
+                                    or current_operation.get("status") == "completed"
+                                )
+                                and active.exists()
+                                and not archived.exists()
+                            ):
+                                lc.set_visibility("session", sid, blocked=False)
+                        continue
                     if not operation or operation.get("status") in {
                         "completed",
                         "abandoned",
@@ -200,6 +227,18 @@ class SessionArchiveService:
                     if not sid or sid in self._finalizing:
                         # A live finalizer already owns this session.  Starting
                         # a second one could move or delete the directory twice.
+                        continue
+                    if operation.get("phase") == "check_idle":
+                        # The request was never accepted. Its execution lock
+                        # must be gone before an abandoned probe is rolled back.
+                        async with self.lock("session", sid):
+                            current = lc.state("session", sid).get("operation") or {}
+                            if (
+                                current.get("operation_id") == operation.get("operation_id")
+                                and current.get("phase") == "check_idle"
+                                and current.get("status") != "completed"
+                            ):
+                                lc.reject_unaccepted("session", sid)
                         continue
                     if time.time() < float(operation.get("cleanup_next_at") or 0):
                         continue
@@ -991,16 +1030,27 @@ class SessionArchiveService:
                 (action == "archive" and not archived.exists())
                 or (require_idle and active.exists())
             )
-        if needs_runtime_idle_check:
-            # Fence admission before checking Runtime state so a new task
-            # cannot start between the idle check and the archive operation.
-            lc.set_visibility(
-                "session",
-                session_id,
-                blocked=True,
-                write_blocked=False,
-                deleted=False,
+        if not pending and action == "archive" and archived.exists():
+            return dict(
+                session_id=session_id,
+                ok=True,
+                archived=True,
+                archived_at=self.archive_time(session_id, archived, meta),
+                accepted=True,
+                finalizing=False,
+                stop_pending=False,
+                project_id=project_id,
             )
+        # The admission fence and operation must be committed together. A
+        # pre-accept idle check has its own phase so recovery can undo it.
+        operation = lc.begin(
+            "session",
+            session_id,
+            action,
+            block_execution=True,
+            initial_phase="check_idle" if needs_runtime_idle_check else None,
+        )
+        if needs_runtime_idle_check:
             try:
                 running_probe = getattr(self.runtime, "is_session_running", None)
                 if not callable(running_probe):
@@ -1014,28 +1064,9 @@ class SessionArchiveService:
                         f"session has a running task and cannot be {action}d",
                     )
             except Exception:
-                lc.set_visibility(
-                    "session",
-                    session_id,
-                    blocked=False,
-                    write_blocked=False,
-                    deleted=False,
-                )
+                lc.reject_unaccepted("session", session_id)
                 raise
-        if not pending and action == "archive" and archived.exists():
-            return dict(
-                session_id=session_id,
-                ok=True,
-                archived=True,
-                archived_at=self.archive_time(session_id, archived, meta),
-                accepted=True,
-                finalizing=False,
-                stop_pending=False,
-                project_id=project_id,
-            )
-        operation = lc.begin(
-            "session", session_id, action, block_execution=True
-        )
+            lc.update("session", session_id, phase="block")
         operation = lc.claim_operation(
             "session", session_id, self._owner_id
         )
@@ -1659,6 +1690,7 @@ class SessionArchiveService:
         return result
 
     async def delete_cron_sessions(self, cron_id: str, channel_id: str) -> dict:
+        """Delete cron children even when running; the finalizer stops them."""
         lc.validate_id(cron_id)
         # Sessions of one cron job almost always share a project; take each
         # project's execution lock once per group instead of once per session,

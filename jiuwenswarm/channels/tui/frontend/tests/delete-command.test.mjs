@@ -13,6 +13,7 @@ function createContext({
   answers,
   failDelete = false,
   rejectDelete = false,
+  busyDelete = false,
   isProcessing = false,
   preferredLanguage = "en",
 }) {
@@ -40,6 +41,17 @@ function createContext({
           succeeded_count: 0,
           failed_count: 1,
           results: [{ session_id: params.session_ids[0], error: "delete rejected" }],
+        };
+      }
+      if (method === "session.delete" && busyDelete) {
+        return {
+          succeeded_count: 0,
+          failed_count: 1,
+          results: [{
+            session_id: params.session_ids[0],
+            code: "SESSION_BUSY",
+            error: "session has a running task and cannot be deleted",
+          }],
         };
       }
       if (method === "session.delete") {
@@ -269,6 +281,23 @@ const sessions = [
   assert.equal(entries.at(-1).kind, "error");
   assert.equal(requests.some((request) => request.method === "redirect"), false);
   assert.equal(ctx.sessionId, "current-session");
+}
+
+{
+  const { ctx, entries, requests } = createContext({
+    sessions,
+    busyDelete: true,
+    preferredLanguage: "zh",
+    answers: (step, question) => [{
+      selected_options: [step === 1
+        ? question.options.find((option) => option.label.includes("old-session")).label
+        : "永久删除"],
+    }],
+  });
+  await command.action(ctx, "");
+  assert.match(entries.at(-1).content, /删除 old-session 失败：会话正在运行；请先停止该会话任务再删除/);
+  assert.doesNotMatch(entries.at(-1).content, /session has a running task/);
+  assert.equal(requests.some((request) => request.method === "redirect"), false);
 }
 
 {
