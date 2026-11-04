@@ -6,7 +6,8 @@ author: Yanqing-Shi
 author_email: toddsyq@gmail.com
 modules:
   - jiuwenswarm/channels/tui/frontend
-  - gateway/channel_manager/tui
+  - agent-gateway/agent_gateway/channel_manager/tui
+  - agent-gateway/agent_gateway/common
   - jiuwenswarm/runtime
   - jiuwenswarm/server
   - jiuwenswarm/server/runtime/session
@@ -16,7 +17,8 @@ files:
   - jiuwenswarm/channels/tui/frontend/src/core/ws-client.ts
   - jiuwenswarm/channels/tui/frontend/src/core/commands/types.ts
   - jiuwenswarm/channels/tui/frontend/src/ui/app-screen.ts
-  - gateway/channel_manager/tui/tui_connect.py
+  - agent-gateway/agent_gateway/channel_manager/tui/tui_connect.py
+  - agent-gateway/agent_gateway/common/protocol_compat.py
   - jiuwenswarm/server/agent_ws_server.py
   - jiuwenswarm/runtime/service.py
   - jiuwenswarm/server/runtime/session/session_metadata.py
@@ -26,6 +28,10 @@ files:
 # TUI 同一会话显式模式切换契约
 
 最近一次修订日期：2026-11-04。
+
+普通启动、`/new` 和 `/clear` 的未落库草稿只在本地选择模式，不发送 `mode.set` / `mode.get`，也不因模式命令创建会话。首次消息的 `session.create.mode` 使用所选模式。模式命令等待已有的启动或草稿创建 Promise；创建成功后固定真实会话 ID，并使用恢复后的实时模式作为 `expected_mode`。创建过程中切入其他会话时，旧命令不得向新会话发起模式操作。`/swarmflow on` 复用同一规则；草稿模式选择不影响原有配置写入和失败回切语义。
+
+独立 `agent-gateway` 在自身的 `common/protocol_compat.py` 注册协议包尚缺的同值 `MODE_SET` / `MODE_GET`，不依赖导入 JiuwenSwarm 来扩展枚举。TUI 路由将两种请求转发到 AgentServer，且不生成本地成功 ACK；生命周期注册继续由 gateway PR 24 的实现负责。
 
 `mode.set` 是 TUI Session 切换执行模式的显式入口。请求包含当前 `session_id`、完整 canonical `mode`，以及建议携带的 `expected_mode`。仅支持 agent/team 的 work/code normal/plan 组合；`team.design` 不经此入口。成功响应包含 `previous_mode`、`mode`、`work_mode`、`project_id`、`changed`，并在返回前同步持久化。重复提交当前目标返回 `changed=false`；期望值过期返回 `MODE_CONFLICT`，会话不存在或用户不匹配返回 `NOT_FOUND`，本进程有活动执行或其他存活 AgentServer 持有运行态时返回 `SESSION_BUSY`。切换提交与 Runtime 认领共用跨进程 Session 锁。
 

@@ -6,7 +6,8 @@ author: Yanqing-Shi
 author_email: toddsyq@gmail.com
 modules:
 - jiuwenswarm/channels/tui/frontend
-- gateway/channel_manager/tui
+- agent-gateway/agent_gateway/channel_manager/tui
+- agent-gateway/agent_gateway/common
 - jiuwenswarm/runtime
 - jiuwenswarm/server
 - jiuwenswarm/server/runtime/session
@@ -18,14 +19,18 @@ files:
 - jiuwenswarm/channels/tui/frontend/src/core/commands/types.ts
 - jiuwenswarm/channels/tui/frontend/src/ui/app-screen.ts
 - jiuwenswarm/channels/tui/frontend/tests/run-tests.mjs
-- gateway/channel_manager/tui/tui_connect.py
-- gateway/app_gateway.py
+- jiuwenswarm/channels/tui/frontend/tests/mode-draft-compat.test.mjs
+- jiuwenswarm/channels/tui/frontend/package.json
+- agent-gateway/agent_gateway/channel_manager/tui/tui_connect.py
+- agent-gateway/agent_gateway/common/protocol_compat.py
+- agent-gateway/tests/unit_tests/gateway/test_tui_mode_forwarding.py
 - jiuwenswarm/common/schema/message.py
 - jiuwenswarm/server/agent_ws_server.py
 - jiuwenswarm/runtime/service.py
 - jiuwenswarm/server/runtime/session/session_metadata.py
 - jiuwenswarm/server/runtime/session/session_history.py
 - tests/unit_tests/runtime/test_session_mode_switch.py
+- tests/unit_tests/server/test_archive_lifecycle.py
 designs:
 - D-20261101-1139-tui-session-mode-switch
 ---
@@ -64,3 +69,22 @@ TUI 用例覆盖成功、忙碌拒绝且不自动中断、超时与网络中断�
 ## 检视后修订
 
 2026-11-04 的旧数据恢复、成功响应归一化与 Gateway 导入顺序修复见 [B_20261104_2319_tui-mode-response-recovery](../bugfix/jiuwenswarm/server/runtime/session/B_20261104_2319_tui-mode-response-recovery.md)。当前恢复与错误语义以 `S_01_tui-mode-switch` 为准；上文保留第一阶段原验证事实。
+
+## 2026-11-04 与 PR 10243 / gateway PR 24 的本地兼容
+
+远端核对时 PR 10243 为 `d2cfad7942e8804bf5f82f064bb00d2ff1445e35`，PR 10515 为 `90cf5d0f6788795937466dcdf35bbfcf85c7546e`，gateway PR 24 为 `54ed9dd936e3a1bf92b21dfa4467663c730a592a`。用户要求尽量保留 PR 10243 提交，因此本地候选以 PR 10243 为基线叠加 PR 10515 及其已有未提交恢复修复；原两个工作区和 PR 提交不改写。gateway 副本同样以 PR 24 为基线追加模式转发。
+
+`app-state.ts` 的三个文本冲突分别涉及状态字段、命令上下文和创建完成后的 ID 更新。保留 PR 10243 的所有草稿状态、排队帧重绑定及清理逻辑；模式命令增加启动结果与最近一次草稿到真实会话的映射，解析时等待已发起的创建，随后固定请求目标。命令上下文提供实时草稿判定。未创建的草稿只更新本地模式；已有会话继续走显式提交和忙碌保护。不用恢复启动即创建会话来绕过冲突，也不直接把命令目标改成任意当前会话，以免迟到结果误操作用户后来切入的会话。
+
+独立 gateway 的转发集合增加 `mode.set` / `mode.get`，协议兼容列表增加同名同值枚举，共六行生产代码新增。沿用已有 `protocol_compat` 扩展点，无需把 `app_gateway.py` 改回导入宿主 `jiuwenswarm.common.schema.message`。PR 24 的归档、恢复、删除处理器及生命周期事件实现保留。JiuwenSwarm 新模式测试改用 `agent_gateway` 导入路径。
+
+验证环境为 Windows、Python 3.14.7、Node 26.13.0、共享现有 `.venv` 和前端依赖；Python 通过 `PYTHONPATH` 加载上述两个本地候选，运行数据和临时目录隔离在 `artifacts/mode-draft-verification/`。仅转译 TypeScript 生成测试 ES module，不运行格式化或静态检查。
+
+- 完整 TUI `npm test` 通过，包括原 PR 10243 的草稿、归档、删除测试及新增 `mode-draft-compat.test.mjs`。新增场景从实际 AppState / 命令入口覆盖启动屏障、`/new` / `/clear` 后本地模式选择、首条 Plan 消息、Persist 初始化、创建中切换、忙碌拒绝、切入其他会话、创建失败、草稿 SwarmFlow 和配置查询期间创建完成。
+- 模式切换、跨层协议、metadata 写入、team dispatch、runtime service、request、archive lifecycle 及新增独立 gateway 用例共 **380 passed**。命令显式使用 `--asyncio-mode=auto`；清空 pytest 默认 addopts 时不能遗漏该参数。
+- gateway CLI handlers、TUI project path、lifecycle handlers 和 GatewayServer 分派回归为 **130 passed, 1 skipped**。
+- gateway 新用例在隔离子进程中导入包，验证枚举可用且未导入 JiuwenSwarm；实际 GatewayServer 接收两种 JSON 请求帧后保留会话和模式参数并转发，不发本地 ACK。
+
+迁回 PR 10515 原分支后的全组复验暴露 `test_archive_lifecycle.py` 的一处历史 `gateway.channel_manager.web` 导入：初次候选环境仍可从已有 editable 包找到旧 gateway，因此该结果不能单独证明测试已完成拆仓适配。将该导入改为 `agent_gateway.channel_manager.web`，作为 PR 10515 的后续修复保留 PR 10243 历史；最终复验只加载独立 gateway，运行命令使用原分支的源码目录与隔离运行目录，十二组测试合计 **510 passed, 1 skipped**。完整 TUI 测试在原分支重新转译后通过。
+
+以上结果对应本次候选源码及本地 gateway 覆盖，不代表锁定依赖已发布；未运行真实 AgentServer/模型连接或交互终端截图验证。后续替换 gateway 依赖、改动创建/分派装配或更新候选代码时重验受影响范围。初次候选准备阶段未提交或推送；用户随后确认将既有修复与兼容合并提交到 PR 10515 原分支，gateway 修复单独保留本地分支。本次不推送或更新远端 PR。

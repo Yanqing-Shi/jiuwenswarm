@@ -13,7 +13,7 @@ from weakref import WeakValueDictionary
 import psutil
 import pytest
 
-from gateway.channel_manager.tui.tui_connect import CLI_FORWARD_REQ_METHODS
+from agent_gateway.channel_manager.tui.tui_connect import CLI_FORWARD_REQ_METHODS
 from jiuwenswarm.common.schema.agent import AgentRequest
 from jiuwenswarm.common.schema.message import ReqMethod
 from jiuwenswarm.runtime.service import AgentRuntime, SessionModeSwitchError

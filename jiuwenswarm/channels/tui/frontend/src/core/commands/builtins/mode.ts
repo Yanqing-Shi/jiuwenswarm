@@ -50,7 +50,7 @@ async function readAuthoritativeMode(
   }
 }
 
-/** Switch the visible mode only after the Session has committed it. */
+/** Select a draft's mode locally; commit a saved Session before updating its mode. */
 export async function switchMode(
   ctx: CommandContext,
   nextMode: ClientMode,
@@ -72,6 +72,15 @@ export async function switchMode(
   const isCurrentSession = (): boolean =>
     (ctx.getCurrentSessionId?.() ?? ctx.sessionId) === sessionId;
   if (!isCurrentSession()) return false;
+  if (ctx.isCurrentSessionDraft?.()) {
+    ctx.setMode(nextMode);
+    ctx.markModeConfirmed?.();
+    if (nextMode.endsWith(".plan")) ctx.markPlanEntryFromSlashCommand?.();
+    if (options.announce !== false) {
+      ctx.addItem(makeItem(sessionId, "info", `Mode set to ${formatModeForDisplay(nextMode)}`, "m"));
+    }
+    return true;
+  }
   const currentMode = ctx.getCurrentMode?.() ?? ctx.mode;
   let committedMode: ClientMode = currentMode;
   try {

@@ -1,23 +1,24 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
 import asyncio
+from contextlib import suppress
 
 import pytest
 from openjiuwen_protocol.e2a.agent_models import AgentResponse
 from openjiuwen_protocol.message import ReqMethod
-
-from tests.unit_tests.gateway.config_routing_harness import make_config_routing_client
-from gateway.common.config_panel import tui_models_handlers
-from jiuwenswarm.common.config_panel import tui_models_handlers as _server_tui_models_handlers
-from gateway.channel_manager.tui import tui_connect as tui_connect_module
-from gateway.channel_manager.tui.tui_connect import (
+from agent_gateway.common.config_panel import tui_models_handlers
+from agent_gateway.channel_manager.tui import tui_connect as tui_connect_module
+from agent_gateway.channel_manager.tui.tui_connect import (
     CliHandlersBindParams,
     CliRouteBindParams,
     build_cli_route_binding,
     register_cli_handlers,
 )
-from gateway.routing.agent_client import WebSocketAgentServerClient
-from gateway.heartbeat import HeartbeatServiceUnavailableError
+from agent_gateway.routing.agent_client import WebSocketAgentServerClient
+from agent_gateway.heartbeat import HeartbeatServiceUnavailableError
+
+from tests.unit_tests.gateway.config_routing_harness import make_config_routing_client
+from jiuwenswarm.common.config_panel import tui_models_handlers as _server_tui_models_handlers
 
 
 class FakeGatewayServer:
@@ -175,6 +176,9 @@ async def test_register_cli_handlers_registers_local_methods():
     assert "config.get" in cli_handlers
     assert "config.validate_model" in cli_handlers
     assert "session.list" in cli_handlers
+    assert "session.archive" in cli_handlers
+    assert "session.unarchive" in cli_handlers
+    assert "session.archived.list" in cli_handlers
     assert "chat.send" in cli_handlers
     assert "chat.resume" in cli_handlers
     assert "history.get" in cli_handlers
@@ -223,7 +227,7 @@ async def test_memory_list_forwards_to_agentserver_with_routing_user(monkeypatch
         return True
 
     monkeypatch.setattr(
-        "gateway.routing.e2a_proxy.proxy_unary_request",
+        "agent_gateway.routing.e2a_proxy.proxy_unary_request",
         fake_proxy_unary_request,
     )
     register_cli_handlers(
@@ -445,7 +449,7 @@ async def test_harmonyos_dev_init_legacy_client_falls_back_to_local(monkeypatch)
     server = FakeGatewayServer()
     _install_failing_dev_init_send(monkeypatch)
     monkeypatch.setattr(
-        "gateway.routing.e2a_proxy.is_legacy_shared_directory_client",
+        "agent_gateway.routing.e2a_proxy.is_legacy_shared_directory_client",
         lambda client: True,
     )
 
@@ -456,7 +460,7 @@ async def test_harmonyos_dev_init_legacy_client_falls_back_to_local(monkeypatch)
         return {"ok": True, "source": "local-fallback"}
 
     monkeypatch.setattr(
-        "gateway.channel_manager.tui.harmonyos.harmonyos_dev.run_harmonyos_dev_init",
+        "agent_gateway.channel_manager.tui.harmonyos.harmonyos_dev.run_harmonyos_dev_init",
         fake_local_init,
     )
 
@@ -495,7 +499,7 @@ async def test_harmonyos_dev_init_remote_client_error_without_fallback(monkeypat
     server = FakeGatewayServer()
     _install_failing_dev_init_send(monkeypatch)
     monkeypatch.setattr(
-        "gateway.routing.e2a_proxy.is_legacy_shared_directory_client",
+        "agent_gateway.routing.e2a_proxy.is_legacy_shared_directory_client",
         lambda client: False,
     )
 
@@ -506,7 +510,7 @@ async def test_harmonyos_dev_init_remote_client_error_without_fallback(monkeypat
         return {"ok": True}
 
     monkeypatch.setattr(
-        "gateway.channel_manager.tui.harmonyos.harmonyos_dev.run_harmonyos_dev_init",
+        "agent_gateway.channel_manager.tui.harmonyos.harmonyos_dev.run_harmonyos_dev_init",
         fake_local_init,
     )
 
@@ -555,7 +559,7 @@ async def test_harmonyos_dev_init_business_failure_does_not_rerun_locally(monkey
         business_failure_send,
     )
     monkeypatch.setattr(
-        "gateway.routing.e2a_proxy.is_legacy_shared_directory_client",
+        "agent_gateway.routing.e2a_proxy.is_legacy_shared_directory_client",
         lambda client: True,
     )
 
@@ -566,7 +570,7 @@ async def test_harmonyos_dev_init_business_failure_does_not_rerun_locally(monkey
         return {"ok": True}
 
     monkeypatch.setattr(
-        "gateway.channel_manager.tui.harmonyos.harmonyos_dev.run_harmonyos_dev_init",
+        "agent_gateway.channel_manager.tui.harmonyos.harmonyos_dev.run_harmonyos_dev_init",
         fake_local_init,
     )
 
@@ -720,7 +724,112 @@ def test_build_cli_route_binding_creates_route_and_install_hook():
     assert "config.get" in cli_handlers
     assert "config.validate_model" in cli_handlers
     assert "session.list" in cli_handlers
+    for method in ("session.archive", "session.archived.list", "session.delete"):
+        assert method in cli_handlers
+        assert method not in binding.forward_methods
     assert "chat.send" in cli_handlers
+
+
+@pytest.mark.asyncio
+async def test_tui_lifecycle_poll_reaches_only_the_bound_window(monkeypatch):
+    from agent_gateway.channel_manager.web import lifecycle_handlers
+
+    server = FakeGatewayServer()
+    target_ws = type("Client", (), {"user_id": "owner", "closed": False})()
+    other_ws = type("Client", (), {"user_id": "other", "closed": False})()
+    server._session_to_client = {
+        ("tui", "target-session"): target_ws,
+        ("tui", "other-session"): other_ws,
+    }
+    server._find_channel_clients = lambda channel_id: [
+        ws for key, ws in server._session_to_client.items() if key[0] == channel_id
+    ]
+    server._connection_user_id = lambda ws: ws.user_id
+    delivered = asyncio.Event()
+    events = []
+
+    async def send_event(ws, event, payload):
+        events.append((ws, event, payload))
+        if event == "session.lifecycle.updated":
+            delivered.set()
+
+    async def fetch_lifecycle(*_args, **_kwargs):
+        return True, {"events": [{
+            "event": "session.lifecycle.updated",
+            "kind": "archive",
+            "completed": False,
+            "payload": {
+                "resource_id": "target-session",
+                "session_id": "target-session",
+                "project_id": "project-a",
+                "revision": 1,
+                "execution_blocked": True,
+                "lifecycle_operation": {"kind": "archive"},
+            },
+            "result": {},
+        }]}
+
+    server.send_event = send_event
+    monkeypatch.setattr(lifecycle_handlers, "fetch_agent_unary", fetch_lifecycle)
+    binding = build_cli_route_binding(CliRouteBindParams(path="/tui"))
+    binding.install(server)
+    binding.session_bind_handler("tui", "target-session")
+    await asyncio.wait_for(delivered.wait(), 1)
+    assert [(ws, event) for ws, event, _ in events] == [
+        (target_ws, "session.lifecycle.updated")
+    ]
+    watcher_tasks = [
+        task for task in asyncio.all_tasks()
+        if task.get_name() == "tui-lifecycle-events"
+    ]
+    for task in watcher_tasks:
+        task.cancel()
+    for task in watcher_tasks:
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.asyncio
+async def test_tui_archive_notifies_another_window_for_the_same_user(monkeypatch):
+    from agent_gateway.channel_manager.web import lifecycle_handlers
+
+    server = FakeGatewayServer()
+    source_ws = type("Client", (), {"user_id": "owner", "closed": False})()
+    target_ws = type("Client", (), {"user_id": "owner", "closed": False})()
+    unrelated_ws = type("Client", (), {"user_id": "other", "closed": False})()
+    server._session_to_client = {
+        ("tui", "source-session"): source_ws,
+        ("tui", "target-session"): target_ws,
+        ("tui", "unrelated-session"): unrelated_ws,
+    }
+    server._find_channel_clients = lambda channel_id: [
+        ws for key, ws in server._session_to_client.items() if key[0] == channel_id
+    ]
+    server._connection_user_id = lambda ws: ws.user_id
+    events = []
+
+    async def send_event(ws, event, payload):
+        events.append((ws, event, payload))
+
+    async def archive_response(*_args, **_kwargs):
+        return True, {
+            "succeeded_count": 1,
+            "failed_count": 0,
+            "results": [{"session_id": "target-session", "ok": True, "accepted": True}],
+        }
+
+    server.send_event = send_event
+    monkeypatch.setattr(lifecycle_handlers, "fetch_agent_unary", archive_response)
+    binding = build_cli_route_binding(CliRouteBindParams(path="/tui"))
+    binding.install(server)
+    server.ensure_lifecycle_watch = lambda _user_id: None
+    await server.local_handlers["/tui"]["session.archive"](
+        source_ws, "archive-request", {"session_ids": ["target-session"]}, "source-session", "owner"
+    )
+    assert {(ws, event) for ws, event, _ in events} == {
+        (source_ws, "session.archived"),
+        (target_ws, "session.archived"),
+    }
 
 
 @pytest.mark.asyncio
@@ -1243,7 +1352,7 @@ async def test_session_list_returns_agent_timeout_before_tui_request_timeout(mon
             await asyncio.Event().wait()
 
     monkeypatch.setattr(
-        "gateway.routing.agent_request_timeout._TUI_DEFAULT_UNARY_TIMEOUT_SECONDS",
+        "agent_gateway.routing.agent_request_timeout._TUI_DEFAULT_UNARY_TIMEOUT_SECONDS",
         0.01,
         raising=False,
     )
@@ -1686,7 +1795,7 @@ async def test_agentos_cron_update_project_fields_with_dict_job(monkeypatch) -> 
         )
     )
     monkeypatch.setattr(
-        "gateway.routing.e2a_proxy.is_agentos_routing_client",
+        "agent_gateway.routing.e2a_proxy.is_agentos_routing_client",
         lambda _client: True,
     )
 
@@ -1696,7 +1805,7 @@ async def test_agentos_cron_update_project_fields_with_dict_job(monkeypatch) -> 
         return True, {"project_id": "user-proj-1", "work_mode": "code"}
 
     monkeypatch.setattr(
-        "gateway.routing.e2a_proxy.resolve_agent_cron_project_binding",
+        "agent_gateway.routing.e2a_proxy.resolve_agent_cron_project_binding",
         _fake_resolve_agent_cron_project_binding,
     )
 
