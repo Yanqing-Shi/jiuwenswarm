@@ -31,6 +31,8 @@ files:
 - jiuwenswarm/server/runtime/session/session_history.py
 - tests/unit_tests/runtime/test_session_mode_switch.py
 - tests/unit_tests/server/test_archive_lifecycle.py
+- pyproject.toml
+- uv.lock
 designs:
 - D-20261101-1139-tui-session-mode-switch
 ---
@@ -87,4 +89,12 @@ TUI 用例覆盖成功、忙碌拒绝且不自动中断、超时与网络中断�
 
 迁回 PR 10515 原分支后的全组复验暴露 `test_archive_lifecycle.py` 的一处历史 `gateway.channel_manager.web` 导入：初次候选环境仍可从已有 editable 包找到旧 gateway，因此该结果不能单独证明测试已完成拆仓适配。将该导入改为 `agent_gateway.channel_manager.web`，作为 PR 10515 的后续修复保留 PR 10243 历史；最终复验只加载独立 gateway，运行命令使用原分支的源码目录与隔离运行目录，十二组测试合计 **510 passed, 1 skipped**。完整 TUI 测试在原分支重新转译后通过。
 
-以上结果对应本次候选源码及本地 gateway 覆盖，不代表锁定依赖已发布；未运行真实 AgentServer/模型连接或交互终端截图验证。后续替换 gateway 依赖、改动创建/分派装配或更新候选代码时重验受影响范围。初次候选准备阶段未提交或推送；用户随后确认将既有修复与兼容合并提交到 PR 10515 原分支，gateway 修复单独保留本地分支。本次不推送或更新远端 PR。
+以上结果对应本次候选源码及本地 gateway 覆盖，不代表锁定依赖已发布；未运行真实 AgentServer/模型连接或交互终端截图验证。后续替换 gateway 依赖、改动创建/分派装配或更新候选代码时重验受影响范围。初次候选准备阶段未提交或推送；用户随后确认将既有修复与兼容合并提交到 PR 10515 原分支。该阶段 gateway 修复单独保留本地分支，后续远端依赖闭环见下一节。
+
+## Gateway 依赖发布与锁定验证
+
+用户确认将 gateway 配套提交推送到 PR 24 的原分支 `pr10243-tui-session-lifecycle`，并更新该 PR 的标题和说明，分别关联 JiuwenSwarm PR 10243 的生命周期功能和 PR 10515 的模式转发功能。PR 24 保留原有生命周期实现；新增 `mode.set` / `mode.get` 转发和独立进程协议兼容。10243 的提交与依赖不在本次改动范围内。
+
+PR 10515 的 `pyproject.toml` 两处依赖声明及 `uv.lock` 改为同一远端提交 `eec0a207435d103aa4be44063eeba35f121e813c`。使用 uv 0.12.5 执行 `uv lock --upgrade-package agent-gateway` 解析 330 个包；保留现有锁格式 revision 5，再以 uv 0.12.15 执行 `uv lock --locked --offline` 通过。锁文件仅更新 gateway 的提交引用，没有升级其他包。
+
+验证从锁文件读取仓库和提交，将远端 gateway 构建为非 editable 包，安装到隔离目录，独立检查 `direct_url.json` 中的提交 ID、包实际加载路径，以及不导入 JiuwenSwarm 时的协议枚举注册和 TUI 转发集合。随后使用该安装目录替代本地 gateway checkout 的 `PYTHONPATH` 覆盖，重跑上述十二组测试，结果为 **510 passed, 1 skipped**。其他 Python 依赖沿用已有测试环境，本次不宣称完成全新环境的全部依赖安装或真实服务端端到端验证。
