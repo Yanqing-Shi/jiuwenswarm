@@ -250,6 +250,46 @@ assert.deepEqual(conflictRequests, ["mode.set", "mode.get"]);
 assert.equal(visibleMode, "team.code.normal");
 assert.ok(modeSwitchEvents.some((item) => /current mode is team.code/.test(item.content)));
 
+for (const [wireMode, canonical] of [["team", "team.work.normal"], ["code.team", "team.code.normal"]]) {
+  let mode = canonical;
+  let confirmed = 0;
+  const ctx = {
+    sessionId: "legacy-mode", mode: canonical,
+    request: async () => ({ mode: wireMode, changed: false }),
+    setMode: (value) => { mode = value; },
+    markModeConfirmed: () => { confirmed += 1; },
+    addItem: () => {},
+  };
+  assert.equal(await switchMode(ctx, canonical), true);
+  assert.equal(mode, canonical);
+  assert.equal(confirmed, 1);
+}
+
+for (const payload of [{}, null, { mode: null }, { mode: "unknown" }, { mode: 1 },
+  { mode: "team.design" }, { mode: "toString" }, { mode: "constructor" }]) {
+  let unconfirmed = false;
+  const errors = [];
+  const ctx = {
+    sessionId: "invalid-mode", mode: "agent.code.normal",
+    request: async () => payload,
+    setMode: () => assert.fail("Invalid mode must not reach UI state"),
+    markModeConfirmed: () => assert.fail("Invalid mode must not confirm a switch"),
+    markModeUnconfirmed: () => { unconfirmed = true; },
+    addItem: (item) => errors.push(item),
+  };
+  assert.equal(await switchMode(ctx, "team.work.normal"), false);
+  assert.equal(unconfirmed, true);
+  assert.ok(errors.some((item) => /mode.set returned an unsupported mode/.test(item.content)));
+  // The user can explicitly retry /mode after a malformed response.
+  ctx.request = async () => ({ mode: "team.work.normal", changed: true });
+  let repairedMode;
+  ctx.setMode = (value) => { repairedMode = value; };
+  ctx.markModeConfirmed = () => { unconfirmed = false; };
+  assert.equal(await switchMode(ctx, "team.work.normal"), true);
+  assert.equal(repairedMode, "team.work.normal");
+  assert.equal(unconfirmed, false);
+}
+
 modeSwitchContext.request = async (method) => {
   if (method === "mode.set") {
     throw Object.assign(new Error("session mode changed"), { code: "MODE_CONFLICT" });

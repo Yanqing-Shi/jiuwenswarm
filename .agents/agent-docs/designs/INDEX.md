@@ -1,36 +1,34 @@
 ---
 title: 设计文档索引
-author: xinyang_bali
-author_email: 835397263@qq.com
+author: Yanqing-Shi
+author_email: toddsyq@gmail.com
 generated: true
 ---
 
 <!-- 本文件由 .agents/skills/jw-design/scripts/generate_index.py 自动生成，请勿手改。重新生成：python .agents/skills/jw-design/scripts/generate_index.py -->
-<!-- generated-at: 2026-11-04T06:14+08:00 -->
+<!-- generated-at: 2026-11-05T00:54+08:00 -->
 
 # 设计文档索引 (INDEX)
 
-> 开发前 4 · 开发中 0 · 开发后 3 · 已否决 0
-
-按模块目录分组，组内按生命周期展示；跨模块设计在各相关模块下列出，全局统计按文档去重。
+按模块目录分组，组内按生命周期展示；跨模块设计在各相关模块下列出。
 
 ## 模块目录
 
-| 模块 | 设计数 |
-|---|---|
-| [agent_teams](#module-1) | 1 |
-| [agent_teams/workflow](#module-2) | 3 |
-| [gateway](#module-3) | 1 |
-| [gateway/channel_manager/tui](#module-4) | 1 |
-| [jiuwenswarm](#module-5) | 3 |
-| [jiuwenswarm/channels/tui/frontend](#module-6) | 1 |
-| [jiuwenswarm/channels/web/frontend](#module-7) | 1 |
-| [jiuwenswarm/common/schema](#module-8) | 1 |
-| [jiuwenswarm/gateway/channel_manager/web](#module-9) | 1 |
-| [jiuwenswarm/observability](#module-10) | 1 |
-| [jiuwenswarm/runtime](#module-11) | 1 |
-| [jiuwenswarm/server](#module-12) | 1 |
-| [jiuwenswarm/server/runtime/session](#module-13) | 1 |
+| 模块 |
+|---|
+| [agent_teams](#module-1) |
+| [agent_teams/workflow](#module-2) |
+| [gateway](#module-3) |
+| [gateway/channel_manager/tui](#module-4) |
+| [jiuwenswarm](#module-5) |
+| [jiuwenswarm/channels/tui/frontend](#module-6) |
+| [jiuwenswarm/channels/web/frontend](#module-7) |
+| [jiuwenswarm/common/schema](#module-8) |
+| [jiuwenswarm/gateway/channel_manager/web](#module-9) |
+| [jiuwenswarm/observability](#module-10) |
+| [jiuwenswarm/runtime](#module-11) |
+| [jiuwenswarm/server](#module-12) |
+| [jiuwenswarm/server/runtime/session](#module-13) |
 
 <a id="module-1"></a>
 

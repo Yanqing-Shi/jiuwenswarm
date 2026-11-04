@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -167,7 +168,98 @@ def test_mode_get_reads_persisted_mode_and_checks_user(mode_session):
     assert denied.value.code == "NOT_FOUND"
 
 
-def test_mode_set_rejects_foreign_live_runtime_owner(mode_session):
+@pytest.mark.parametrize("mode_fields", [
+    {}, {"mode": None}, {"mode": "unknown"}, {"mode": ""},
+    {"mode": "future.mode"}, {"mode": 1}, {"mode": []}, {"mode": {}},
+    {"mode": "team.design"},
+])
+def test_unknown_mode_requires_explicit_repair(mode_session, monkeypatch, mode_fields):
+    from jiuwenswarm.server.runtime.session import session_history
+
+    markers = []
+    monkeypatch.setattr(session_history, "append_session_mode_changed", lambda **item: markers.append(item))
+    metadata_path = session_metadata.get_agent_sessions_dir() / "one-session" / "metadata.json"
+    stored = json.loads(metadata_path.read_text(encoding="utf-8"))
+    stored.pop("mode", None)
+    stored.update(mode_fields)
+    metadata_path.write_text(json.dumps(stored), encoding="utf-8")
+
+    with pytest.raises(SessionModeSwitchError) as unknown:
+        AgentRuntime.get_session_mode(session_id="one-session", user_id="user-1")
+    assert unknown.value.code == "MODE_UNKNOWN"
+    assert "/mode" in str(unknown.value)
+    assert json.loads(metadata_path.read_text(encoding="utf-8")) == stored
+
+    runtime = AgentRuntime(agent_manager=AsyncMock(), initializer=AsyncMock())
+    with pytest.raises(SessionModeSwitchError) as denied:
+        runtime.switch_session_mode(
+            session_id="one-session", target_mode="team.work.normal",
+            expected_mode="agent.code.normal", channel_id="tui", user_id="user-2",
+        )
+    assert denied.value.code == "NOT_FOUND"
+
+    runtime.begin_chat_request("one-session", "in-flight")
+    with pytest.raises(SessionModeSwitchError) as busy:
+        runtime.switch_session_mode(
+            session_id="one-session", target_mode="team.work.normal",
+            expected_mode="agent.code.normal", channel_id="tui", user_id="user-1",
+        )
+    assert busy.value.code == "SESSION_BUSY"
+    assert json.loads(metadata_path.read_text(encoding="utf-8")) == stored
+    runtime.end_chat_request("one-session", "in-flight")
+
+    result = runtime.switch_session_mode(
+        session_id="one-session", target_mode="team.work.normal",
+        expected_mode="agent.code.normal", channel_id="tui", user_id="user-1",
+    )
+    assert result["mode"] == "team.work.normal"
+    assert result["previous_mode"] is None
+    assert result["changed"] is True
+    persisted = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert persisted["mode"] == "team.work.normal"
+    assert persisted["mode_revision"] == 1
+    for field in ("project_id", "project_dir", "work_mode"):
+        assert persisted[field] == stored[field]
+    assert AgentRuntime.get_session_mode(session_id="one-session", user_id="user-1")["mode"] == result["mode"]
+    assert len(markers) == 1
+    assert markers[0]["previous_mode"] is None
+
+    # A later client cannot use the unknown-route repair to overwrite a known route.
+    with pytest.raises(SessionModeSwitchError) as conflict:
+        runtime.switch_session_mode(
+            session_id="one-session", target_mode="agent.work.normal",
+            expected_mode="agent.code.normal", channel_id="tui", user_id="user-1",
+        )
+    assert conflict.value.code == "MODE_CONFLICT"
+
+
+@pytest.mark.parametrize("legacy, canonical", [
+    ("team", "team.work.normal"), ("code.team", "team.code.normal"),
+    ("code.normal", "agent.code.normal"), ("agent.plan", "agent.work.plan"),
+])
+def test_legacy_idempotent_mode_set_returns_canonical(mode_session, monkeypatch, legacy, canonical):
+    from jiuwenswarm.server.runtime.session import session_history
+
+    markers = []
+    monkeypatch.setattr(session_history, "append_session_mode_changed", lambda **item: markers.append(item))
+    session_metadata.patch_session_metadata("one-session", {"mode": legacy})
+    runtime = AgentRuntime(agent_manager=AsyncMock(), initializer=AsyncMock())
+    result = runtime.switch_session_mode(
+        session_id="one-session", target_mode=canonical, expected_mode=canonical,
+        channel_id="tui", user_id="user-1",
+    )
+    assert result["mode"] == canonical
+    assert result["previous_mode"] == canonical
+    assert result["changed"] is False
+    assert AgentRuntime.get_session_mode(session_id="one-session", user_id="user-1")["mode"] == canonical
+    metadata_path = session_metadata.get_agent_sessions_dir() / "one-session" / "metadata.json"
+    assert json.loads(metadata_path.read_text(encoding="utf-8"))["mode"] == legacy
+    assert markers == []
+
+
+@pytest.mark.parametrize("stored_mode", ["agent.code.normal", "unknown"])
+def test_mode_set_rejects_foreign_live_runtime_owner(mode_session, stored_mode):
+    session_metadata.patch_session_metadata("one-session", {"mode": stored_mode})
     owner = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(30)"],
         stdout=subprocess.DEVNULL,
@@ -195,7 +287,7 @@ def test_mode_set_rejects_foreign_live_runtime_owner(mode_session):
         assert busy.value.code == "SESSION_BUSY"
         assert session_metadata.get_session_metadata(
             "one-session", cache_bust=True, enable_writeback=False,
-        )["mode"] == "agent.code.normal"
+        )["mode"] == stored_mode
     finally:
         owner.terminate()
         owner.wait(timeout=5)

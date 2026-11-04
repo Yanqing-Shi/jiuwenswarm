@@ -60,3 +60,7 @@ TUI 对超时和连接中断重试一次，再通过 `mode.get` 核对权威状�
 TUI 用例覆盖成功、忙碌拒绝且不自动中断、超时与网络中断、冲突核对、编辑器输入和附件保留、会话切换竞态、启动 Session ID 解析及 SwarmFlow 回切。使用 Node 26.13.0，仅将 TypeScript 转译为测试所需 ES module，不运行类型检查或格式化。最终 `npm test` 全部通过，包含输入编辑、监督环境、交接端口、任务生命周期、切换命令、会话注册、用户回答、Persist、记忆、演进、cron、状态栏及工具结果套件。
 
 未执行真实服务端连接、外部模型或交互式终端截图验证；上述证据是自动化行为测试，不代表模型上下文交接验收。运行日志、会话轨迹和其他原始运行产物不属于交付内容。
+
+## 检视后修订
+
+2026-11-04 的旧数据恢复、成功响应归一化与 Gateway 导入顺序修复见 [B_20261104_2319_tui-mode-response-recovery](../bugfix/jiuwenswarm/server/runtime/session/B_20261104_2319_tui-mode-response-recovery.md)。当前恢复与错误语义以 `S_01_tui-mode-switch` 为准；上文保留第一阶段原验证事实。

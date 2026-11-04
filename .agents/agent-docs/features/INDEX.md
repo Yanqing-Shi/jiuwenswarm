@@ -1,7 +1,7 @@
 ---
 title: 实施与决策 F索引
-author: xinyang_bali
-author_email: 835397263@qq.com
+author: Yanqing-Shi
+author_email: toddsyq@gmail.com
 generated: true
 ---
 
@@ -9,25 +9,25 @@ generated: true
 
 由 sync_documents.py 从文档 frontmatter 自动生成；请修改源文档后重新生成，不手工维护。
 
-共 5 篇文档，按模块分组；跨模块文档在各相关分组展示，总数按文档去重。
+按模块分组；跨模块文档在各相关分组展示。
 
 ## 模块导航
 
-| 模块 | 文档数 |
-|---|---|
-| [gateway/channel_manager/tui](#module-1) | 1 |
-| [gateway/channel_manager/web](#module-2) | 1 |
-| [jiuwenswarm/agents/harness](#module-3) | 1 |
-| [jiuwenswarm/agents/harness/common/rails](#module-4) | 1 |
-| [jiuwenswarm/agents/harness/common/tools](#module-5) | 1 |
-| [jiuwenswarm/channels/tui/frontend](#module-6) | 1 |
-| [jiuwenswarm/channels/web/frontend](#module-7) | 1 |
-| [jiuwenswarm/extensions/sdk](#module-8) | 1 |
-| [jiuwenswarm/resources/plugins/ttse](#module-9) | 1 |
-| [jiuwenswarm/runtime](#module-10) | 1 |
-| [jiuwenswarm/server](#module-11) | 1 |
-| [jiuwenswarm/server/runtime/agent_adapter](#module-12) | 3 |
-| [jiuwenswarm/server/runtime/session](#module-13) | 1 |
+| 模块 |
+|---|
+| [gateway/channel_manager/tui](#module-1) |
+| [gateway/channel_manager/web](#module-2) |
+| [jiuwenswarm/agents/harness](#module-3) |
+| [jiuwenswarm/agents/harness/common/rails](#module-4) |
+| [jiuwenswarm/agents/harness/common/tools](#module-5) |
+| [jiuwenswarm/channels/tui/frontend](#module-6) |
+| [jiuwenswarm/channels/web/frontend](#module-7) |
+| [jiuwenswarm/extensions/sdk](#module-8) |
+| [jiuwenswarm/resources/plugins/ttse](#module-9) |
+| [jiuwenswarm/runtime](#module-10) |
+| [jiuwenswarm/server](#module-11) |
+| [jiuwenswarm/server/runtime/agent_adapter](#module-12) |
+| [jiuwenswarm/server/runtime/session](#module-13) |
 
 <a id="module-1"></a>
 

@@ -46,7 +46,6 @@ from openjiuwen_protocol.message import (
     Message,
     Mode,
 )
-from jiuwenswarm.common.schema.message import ReqMethod
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 
 from gateway.common.media_capability_config import (
@@ -93,6 +92,8 @@ from gateway.channel_manager.base import BaseWebChannel
 _mark_startup_import_phase("openjiuwen_and_channel_base_imported")
 
 # --- Now safe to import jiuwenswarm modules ---
+from jiuwenswarm.common.schema.message import ReqMethod
+
 from gateway.channel_manager.protocol.acp.acp_connect import AcpGatewayBridge
 from gateway.channel_manager.web.media import (
     normalize_chat_media_attachments,

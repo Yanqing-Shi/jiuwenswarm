@@ -1,7 +1,7 @@
 ---
 title: D/F/B/S 文档总索引
-author: xinyang_bali
-author_email: 835397263@qq.com
+author: Yanqing-Shi
+author_email: toddsyq@gmail.com
 generated: true
 ---
 
@@ -9,44 +9,44 @@ generated: true
 
 由 sync_documents.py 从文档 frontmatter 自动生成；请修改源文档后重新生成，不手工维护。
 
-共 42 篇文档，按模块分组；跨模块文档在各相关分组展示，总数按文档去重。
+按模块分组；跨模块文档在各相关分组展示。
 
 ## 模块导航
 
-| 模块 | 文档数 |
-|---|---|
-| [agent_teams](#module-1) | 1 |
-| [agent_teams/workflow](#module-2) | 3 |
-| [gateway](#module-3) | 1 |
-| [gateway/channel_manager/im_platforms/xiaoyi](#module-4) | 1 |
-| [gateway/channel_manager/tui](#module-5) | 3 |
-| [gateway/channel_manager/web](#module-6) | 2 |
-| [gateway/message_handler](#module-7) | 1 |
-| [jiuwenswarm](#module-8) | 5 |
-| [jiuwenswarm/agents/harness](#module-9) | 1 |
-| [jiuwenswarm/agents/harness/code/rails/heartbeat](#module-10) | 1 |
-| [jiuwenswarm/agents/harness/common/rails](#module-11) | 2 |
-| [jiuwenswarm/agents/harness/common/tools](#module-12) | 2 |
-| [jiuwenswarm/agents/harness/common/tools/cron](#module-13) | 1 |
-| [jiuwenswarm/channels/tui/frontend](#module-14) | 3 |
-| [jiuwenswarm/channels/web](#module-15) | 3 |
-| [jiuwenswarm/channels/web/frontend](#module-16) | 4 |
-| [jiuwenswarm/common/schema](#module-17) | 1 |
-| [jiuwenswarm/extensions/sdk](#module-18) | 2 |
-| [jiuwenswarm/gateway/channel_manager/web](#module-19) | 1 |
-| [jiuwenswarm/observability](#module-20) | 1 |
-| [jiuwenswarm/resources/plugins/ttse](#module-21) | 2 |
-| [jiuwenswarm/runtime](#module-22) | 3 |
-| [jiuwenswarm/server](#module-23) | 5 |
-| [jiuwenswarm/server/runtime/agent_adapter](#module-24) | 9 |
-| [jiuwenswarm/server/runtime/session](#module-25) | 3 |
-| [scripts](#module-26) | 1 |
-| [tests/fixtures/ttse_plugin](#module-27) | 1 |
-| [tests/unit_tests/agentserver](#module-28) | 2 |
-| [tests/unit_tests/gateway](#module-29) | 1 |
-| [tests/unit_tests/personal_context](#module-30) | 1 |
-| [tests/unit_tests/server/extensions](#module-31) | 1 |
-| [未分类](#module-32) | 12 |
+| 模块 |
+|---|
+| [agent_teams](#module-1) |
+| [agent_teams/workflow](#module-2) |
+| [gateway](#module-3) |
+| [gateway/channel_manager/im_platforms/xiaoyi](#module-4) |
+| [gateway/channel_manager/tui](#module-5) |
+| [gateway/channel_manager/web](#module-6) |
+| [gateway/message_handler](#module-7) |
+| [jiuwenswarm](#module-8) |
+| [jiuwenswarm/agents/harness](#module-9) |
+| [jiuwenswarm/agents/harness/code/rails/heartbeat](#module-10) |
+| [jiuwenswarm/agents/harness/common/rails](#module-11) |
+| [jiuwenswarm/agents/harness/common/tools](#module-12) |
+| [jiuwenswarm/agents/harness/common/tools/cron](#module-13) |
+| [jiuwenswarm/channels/tui/frontend](#module-14) |
+| [jiuwenswarm/channels/web](#module-15) |
+| [jiuwenswarm/channels/web/frontend](#module-16) |
+| [jiuwenswarm/common/schema](#module-17) |
+| [jiuwenswarm/extensions/sdk](#module-18) |
+| [jiuwenswarm/gateway/channel_manager/web](#module-19) |
+| [jiuwenswarm/observability](#module-20) |
+| [jiuwenswarm/resources/plugins/ttse](#module-21) |
+| [jiuwenswarm/runtime](#module-22) |
+| [jiuwenswarm/server](#module-23) |
+| [jiuwenswarm/server/runtime/agent_adapter](#module-24) |
+| [jiuwenswarm/server/runtime/session](#module-25) |
+| [scripts](#module-26) |
+| [tests/fixtures/ttse_plugin](#module-27) |
+| [tests/unit_tests/agentserver](#module-28) |
+| [tests/unit_tests/gateway](#module-29) |
+| [tests/unit_tests/personal_context](#module-30) |
+| [tests/unit_tests/server/extensions](#module-31) |
+| [未分类](#module-32) |
 
 <a id="module-1"></a>
 
@@ -73,6 +73,7 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
 | [D-20261101-1139-tui-session-mode-switch](designs/proposals/D-20261101-1139-tui-session-mode-switch/design.md) | D | TUI 会话模式显式切换与运行态一致性 | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway, jiuwenswarm/common/schema, jiuwenswarm/server, jiuwenswarm/runtime, jiuwenswarm/server/runtime/session | jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/mode.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/swarmflow.ts, gateway/channel_manager/tui/tui_connect.py, gateway/app_gateway.py, jiuwenswarm/common/schema/message.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/server/runtime/session/session_history.py | — |
+| [B_20261104_2319_tui-mode-response-recovery](bugfix/jiuwenswarm/server/runtime/session/B_20261104_2319_tui-mode-response-recovery.md) | B | TUI 未知旧模式恢复与幂等响应归一化 | Yanqing-Shi | jiuwenswarm/server/runtime/session, jiuwenswarm/runtime, jiuwenswarm/channels/tui/frontend, gateway | jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/server/runtime/session/session_history.py, jiuwenswarm/runtime/service.py, jiuwenswarm/channels/tui/frontend/src/core/modes.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/mode.ts, jiuwenswarm/channels/tui/frontend/tests/run-tests.mjs, gateway/app_gateway.py, tests/unit_tests/runtime/test_session_mode_switch.py | [D-20261101-1139-tui-session-mode-switch](designs/proposals/D-20261101-1139-tui-session-mode-switch/design.md) |
 
 <a id="module-4"></a>
 
@@ -171,6 +172,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [D-20261101-1139-tui-session-mode-switch](designs/proposals/D-20261101-1139-tui-session-mode-switch/design.md) | D | TUI 会话模式显式切换与运行态一致性 | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway, jiuwenswarm/common/schema, jiuwenswarm/server, jiuwenswarm/runtime, jiuwenswarm/server/runtime/session | jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/mode.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/swarmflow.ts, gateway/channel_manager/tui/tui_connect.py, gateway/app_gateway.py, jiuwenswarm/common/schema/message.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/server/runtime/session/session_history.py | — |
 | [F_20261103_0545_tui-session-mode-switch-phase1](features/F_20261103_0545_tui-session-mode-switch-phase1.md) | F | TUI 同一会话模式切换第一阶段 | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, jiuwenswarm/runtime, jiuwenswarm/server, jiuwenswarm/server/runtime/session | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/mode.ts, jiuwenswarm/channels/tui/frontend/src/core/ws-client.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/swarmflow.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/types.ts, jiuwenswarm/channels/tui/frontend/src/ui/app-screen.ts, jiuwenswarm/channels/tui/frontend/tests/run-tests.mjs, gateway/channel_manager/tui/tui_connect.py, gateway/app_gateway.py, jiuwenswarm/common/schema/message.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/server/runtime/session/session_history.py, tests/unit_tests/runtime/test_session_mode_switch.py | [D-20261101-1139-tui-session-mode-switch](designs/proposals/D-20261101-1139-tui-session-mode-switch/design.md) |
+| [B_20261104_2319_tui-mode-response-recovery](bugfix/jiuwenswarm/server/runtime/session/B_20261104_2319_tui-mode-response-recovery.md) | B | TUI 未知旧模式恢复与幂等响应归一化 | Yanqing-Shi | jiuwenswarm/server/runtime/session, jiuwenswarm/runtime, jiuwenswarm/channels/tui/frontend, gateway | jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/server/runtime/session/session_history.py, jiuwenswarm/runtime/service.py, jiuwenswarm/channels/tui/frontend/src/core/modes.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/mode.ts, jiuwenswarm/channels/tui/frontend/tests/run-tests.mjs, gateway/app_gateway.py, tests/unit_tests/runtime/test_session_mode_switch.py | [D-20261101-1139-tui-session-mode-switch](designs/proposals/D-20261101-1139-tui-session-mode-switch/design.md) |
 | [S_01_tui-mode-switch](specs/jiuwenswarm/server/runtime/session/S_01_tui-mode-switch.md) | S | TUI 同一会话显式模式切换契约 | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, jiuwenswarm/runtime, jiuwenswarm/server, jiuwenswarm/server/runtime/session | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/mode.ts, jiuwenswarm/channels/tui/frontend/src/core/ws-client.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/types.ts, jiuwenswarm/channels/tui/frontend/src/ui/app-screen.ts, gateway/channel_manager/tui/tui_connect.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/server/runtime/session/session_history.py | — |
 
 <a id="module-15"></a>
@@ -244,6 +246,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [D-20261101-1139-tui-session-mode-switch](designs/proposals/D-20261101-1139-tui-session-mode-switch/design.md) | D | TUI 会话模式显式切换与运行态一致性 | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway, jiuwenswarm/common/schema, jiuwenswarm/server, jiuwenswarm/runtime, jiuwenswarm/server/runtime/session | jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/mode.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/swarmflow.ts, gateway/channel_manager/tui/tui_connect.py, gateway/app_gateway.py, jiuwenswarm/common/schema/message.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/server/runtime/session/session_history.py | — |
 | [F_20261103_0545_tui-session-mode-switch-phase1](features/F_20261103_0545_tui-session-mode-switch-phase1.md) | F | TUI 同一会话模式切换第一阶段 | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, jiuwenswarm/runtime, jiuwenswarm/server, jiuwenswarm/server/runtime/session | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/mode.ts, jiuwenswarm/channels/tui/frontend/src/core/ws-client.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/swarmflow.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/types.ts, jiuwenswarm/channels/tui/frontend/src/ui/app-screen.ts, jiuwenswarm/channels/tui/frontend/tests/run-tests.mjs, gateway/channel_manager/tui/tui_connect.py, gateway/app_gateway.py, jiuwenswarm/common/schema/message.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/server/runtime/session/session_history.py, tests/unit_tests/runtime/test_session_mode_switch.py | [D-20261101-1139-tui-session-mode-switch](designs/proposals/D-20261101-1139-tui-session-mode-switch/design.md) |
+| [B_20261104_2319_tui-mode-response-recovery](bugfix/jiuwenswarm/server/runtime/session/B_20261104_2319_tui-mode-response-recovery.md) | B | TUI 未知旧模式恢复与幂等响应归一化 | Yanqing-Shi | jiuwenswarm/server/runtime/session, jiuwenswarm/runtime, jiuwenswarm/channels/tui/frontend, gateway | jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/server/runtime/session/session_history.py, jiuwenswarm/runtime/service.py, jiuwenswarm/channels/tui/frontend/src/core/modes.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/mode.ts, jiuwenswarm/channels/tui/frontend/tests/run-tests.mjs, gateway/app_gateway.py, tests/unit_tests/runtime/test_session_mode_switch.py | [D-20261101-1139-tui-session-mode-switch](designs/proposals/D-20261101-1139-tui-session-mode-switch/design.md) |
 | [S_01_tui-mode-switch](specs/jiuwenswarm/server/runtime/session/S_01_tui-mode-switch.md) | S | TUI 同一会话显式模式切换契约 | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, jiuwenswarm/runtime, jiuwenswarm/server, jiuwenswarm/server/runtime/session | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/mode.ts, jiuwenswarm/channels/tui/frontend/src/core/ws-client.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/types.ts, jiuwenswarm/channels/tui/frontend/src/ui/app-screen.ts, gateway/channel_manager/tui/tui_connect.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/server/runtime/session/session_history.py | — |
 
 <a id="module-23"></a>
@@ -282,6 +285,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [D-20261101-1139-tui-session-mode-switch](designs/proposals/D-20261101-1139-tui-session-mode-switch/design.md) | D | TUI 会话模式显式切换与运行态一致性 | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, gateway, jiuwenswarm/common/schema, jiuwenswarm/server, jiuwenswarm/runtime, jiuwenswarm/server/runtime/session | jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/mode.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/swarmflow.ts, gateway/channel_manager/tui/tui_connect.py, gateway/app_gateway.py, jiuwenswarm/common/schema/message.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/server/runtime/session/session_history.py | — |
 | [F_20261103_0545_tui-session-mode-switch-phase1](features/F_20261103_0545_tui-session-mode-switch-phase1.md) | F | TUI 同一会话模式切换第一阶段 | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, jiuwenswarm/runtime, jiuwenswarm/server, jiuwenswarm/server/runtime/session | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/mode.ts, jiuwenswarm/channels/tui/frontend/src/core/ws-client.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/swarmflow.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/types.ts, jiuwenswarm/channels/tui/frontend/src/ui/app-screen.ts, jiuwenswarm/channels/tui/frontend/tests/run-tests.mjs, gateway/channel_manager/tui/tui_connect.py, gateway/app_gateway.py, jiuwenswarm/common/schema/message.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/server/runtime/session/session_history.py, tests/unit_tests/runtime/test_session_mode_switch.py | [D-20261101-1139-tui-session-mode-switch](designs/proposals/D-20261101-1139-tui-session-mode-switch/design.md) |
+| [B_20261104_2319_tui-mode-response-recovery](bugfix/jiuwenswarm/server/runtime/session/B_20261104_2319_tui-mode-response-recovery.md) | B | TUI 未知旧模式恢复与幂等响应归一化 | Yanqing-Shi | jiuwenswarm/server/runtime/session, jiuwenswarm/runtime, jiuwenswarm/channels/tui/frontend, gateway | jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/server/runtime/session/session_history.py, jiuwenswarm/runtime/service.py, jiuwenswarm/channels/tui/frontend/src/core/modes.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/mode.ts, jiuwenswarm/channels/tui/frontend/tests/run-tests.mjs, gateway/app_gateway.py, tests/unit_tests/runtime/test_session_mode_switch.py | [D-20261101-1139-tui-session-mode-switch](designs/proposals/D-20261101-1139-tui-session-mode-switch/design.md) |
 | [S_01_tui-mode-switch](specs/jiuwenswarm/server/runtime/session/S_01_tui-mode-switch.md) | S | TUI 同一会话显式模式切换契约 | Yanqing-Shi | jiuwenswarm/channels/tui/frontend, gateway/channel_manager/tui, jiuwenswarm/runtime, jiuwenswarm/server, jiuwenswarm/server/runtime/session | jiuwenswarm/channels/tui/frontend/src/app-state.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/mode.ts, jiuwenswarm/channels/tui/frontend/src/core/ws-client.ts, jiuwenswarm/channels/tui/frontend/src/core/commands/types.ts, jiuwenswarm/channels/tui/frontend/src/ui/app-screen.ts, gateway/channel_manager/tui/tui_connect.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/server/runtime/session/session_history.py | — |
 
 <a id="module-26"></a>

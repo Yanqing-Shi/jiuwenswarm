@@ -57,6 +57,8 @@ Top-level commands from `createBuiltinCommands()` in `jiuwenswarm/channels/tui/f
 
 If you open another session while a mode request is pending, its retries and status checks still target the original session. The pending result does not change the new session's displayed mode.
 
+If an older session has a missing or invalid stored mode, `mode.get` reports `MODE_UNKNOWN`. Choose a mode explicitly, for example `/mode team.work` or `/mode agent.code`, to repair it after any active work finishes. The server preserves the original project binding. Legacy mode aliases are normalized in successful responses; a missing or invalid mode in a switch response leaves the TUI unconfirmed until you retry `/mode` or synchronize it.
+
 After a session is restored, `/swarmflow on` uses its current mode. It keeps an existing Team mode such as `team.code`. If it switches to Team and the config write then fails, the TUI attempts to restore the actual previous mode. An unconfirmed rollback is reported explicitly.
 
 > SwarmFlow walkthrough: **[TUI SwarmFlow Guide](TUISwarmFlowGuide.md)**.

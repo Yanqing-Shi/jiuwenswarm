@@ -5,7 +5,7 @@ import { makeItem } from "../helpers.js";
 import { CommandKind, type CommandContext, type SlashCommand } from "../types.js";
 
 interface ModeSetResult {
-  mode: ClientMode;
+  mode?: unknown;
   changed: boolean;
 }
 
@@ -105,7 +105,13 @@ export async function switchMode(
         }
       }
     }
-    committedMode = result.mode;
+    const resolved = typeof result?.mode === "string" ? normalizeToClientMode(result.mode) : undefined;
+    if (!resolved) {
+      if (!isCurrentSession()) return false;
+      ctx.markModeUnconfirmed?.();
+      throw new Error("mode.set returned an unsupported mode; retry /mode or sync before chat");
+    }
+    committedMode = resolved;
   } catch (error) {
     if (!isCurrentSession()) return false;
     const message = error instanceof Error ? error.message : String(error);

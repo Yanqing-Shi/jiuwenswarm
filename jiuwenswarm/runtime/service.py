@@ -3110,6 +3110,7 @@ class AgentRuntime:
             SessionModeConflictError,
             compare_and_set_session_mode,
             get_session_metadata,
+            normalize_tui_session_mode,
         )
 
         if target_mode not in NEW_CANONICAL_MODES or target_mode == "team.design":
@@ -3124,7 +3125,7 @@ class AgentRuntime:
         stored_user_id = str(metadata.get("user_id") or "").strip()
         if stored_user_id and stored_user_id != user_id:
             raise SessionModeSwitchError("session not found", code="NOT_FOUND")
-        already_current = deprecate_mode(metadata.get("mode")) == target_mode
+        already_current = normalize_tui_session_mode(metadata.get("mode")) == target_mode
         if not already_current and self._session_mode_switch_busy(session_id):
             raise SessionModeSwitchError("session is busy", code="SESSION_BUSY")
         try:
@@ -3158,7 +3159,10 @@ class AgentRuntime:
     @staticmethod
     def get_session_mode(*, session_id: str, user_id: str) -> dict[str, Any]:
         """Return the persisted TUI route for an uncertain client retry."""
-        from jiuwenswarm.server.runtime.session.session_metadata import get_session_metadata
+        from jiuwenswarm.server.runtime.session.session_metadata import (
+            get_session_metadata,
+            normalize_tui_session_mode,
+        )
 
         metadata = get_session_metadata(
             session_id, cache_bust=True, enable_writeback=False,
@@ -3168,8 +3172,14 @@ class AgentRuntime:
         stored_user_id = str(metadata.get("user_id") or "").strip()
         if stored_user_id and stored_user_id != user_id:
             raise SessionModeSwitchError("session not found", code="NOT_FOUND")
+        mode = normalize_tui_session_mode(metadata.get("mode"))
+        if mode is None:
+            raise SessionModeSwitchError(
+                "session mode is unknown; use /mode to choose an explicit mode",
+                code="MODE_UNKNOWN",
+            )
         return {
-            "mode": deprecate_mode(metadata.get("mode")),
+            "mode": mode,
             "work_mode": metadata.get("work_mode"),
             "project_id": metadata.get("project_id"),
         }

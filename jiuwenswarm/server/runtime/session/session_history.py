@@ -1452,7 +1452,7 @@ def _enqueue_history_item(
 
 
 def append_session_mode_changed(
-    *, session_id: str, channel_id: str, previous_mode: str, mode: str,
+    *, session_id: str, channel_id: str, previous_mode: str | None, mode: str,
 ) -> None:
     """Record a routing transition without creating a chat turn."""
     _enqueue_history_item(
