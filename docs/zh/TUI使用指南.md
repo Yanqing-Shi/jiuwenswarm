@@ -17,6 +17,7 @@
 | 行为 | 说明 |
 |------|------|
 | **事件隔离** | Gateway 按 `session_id` 将流式响应、工具输出等事件精确投递到对应窗口，不会串到其他窗口。 |
+| **会话关闭通知** | 会话被归档或删除时，Gateway 将生命周期事件送到打开该会话的 TUI 窗口，窗口随即进入新草稿。 |
 | **并发任务** | 不同 session 可并行执行 Agent 任务。 |
 | **同窗口新消息** | 在同一窗口（相同 `session_id`）再次发送聊天，仍会取消该 session 上旧的流式任务。 |
 | **与 ACP 差异** | ACP 仍为 single-user channel（新消息会取消同 channel 上所有进行中任务）；TUI/CLI 已改为按 session 隔离。 |
@@ -140,6 +141,9 @@ jiuwenswarm-tui --session "$(printf 'a%.0s' {1..200})"  # 超 128 → 长度超�
 | `/exit` | `/quit` | 退出 TUI | `/exit` | 全部 |
 | `/clear` | `/reset` | 清空 transcript 并进入草稿，首条消息时创建会话（忙时拒绝） | `/clear` | 全部 |
 | `/new` | - | 进入草稿，首条消息时创建会话；`--persist` 立即创建 Persist Session | `/new` | 全部 |
+| `/archive` | - | 仅当会话任务空闲时才可归档；若会话在 TUI 中打开，受理后该窗口进入新草稿 | `/archive` | 全部 |
+| `/delete` | - | 确认后可永久删除空闲的活跃或归档会话；若会话在 TUI 中打开，受理后该窗口进入新草稿 | `/delete` | 全部 |
+| `/unarchive` | `/restore` | 确认后恢复一个归档会话；使用 `/resume <id>` 切换到该会话 | `/unarchive` | 全部 |
 | `/copy` | - | 复制最近第 N 条助手回复到剪贴板 | `/copy` 或 `/copy 2` | 全部 |
 | `/theme` | - | 切换深/浅色主题 | `/theme dark` | 全部 |
 | `/color` | - | 设置提示条强调色 | `/color blue` | 全部 |

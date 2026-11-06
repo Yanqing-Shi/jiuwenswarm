@@ -6,7 +6,7 @@ generated: true
 ---
 
 <!-- 本文件由 .agents/skills/jw-design/scripts/generate_index.py 自动生成，请勿手改。重新生成：python .agents/skills/jw-design/scripts/generate_index.py -->
-<!-- generated-at: 2026-11-07T00:32+08:00 -->
+<!-- generated-at: 2026-11-06T01:52+08:00 -->
 
 # 设计文档索引 (INDEX)
 

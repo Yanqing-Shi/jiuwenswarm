@@ -510,6 +510,7 @@ export class CliPiAppState {
   private harnessActivateInteraction: HarnessActivateInteraction | null = null;
   private deferTranscriptFrames = false;
   private deferredTranscriptFrames: EventFrame[] = [];
+  private readonly lifecycleRedirects = new Map<string, Promise<string>>();
 
   // ── /switch 公共契约端口（可选；由 index.ts 注入） ──
   /** HandoffPort；未注入时 /switch 通过 CommandContext 回退到 NOT_SUPERVISED。 */
@@ -539,6 +540,9 @@ export class CliPiAppState {
   private readonly eventDelegate: AppEventDelegate = {
     getConnectionStatus: () => this.connectionStatus,
     getSessionId: () => this.sessionId,
+    redirectFromClosedSession: (sessionId, action) => {
+      void this.redirectFromClosedSession(sessionId, action).catch(() => undefined);
+    },
     setSessionId: (sessionId) => {
       this.sessionId = sessionId;
       this.lastVisibleUserRequest = null;
@@ -1295,6 +1299,7 @@ export class CliPiAppState {
       updateSession: this.updateSession,
       enterDraftSession: this.enterDraftSession,
       restoreDraftSession: this.restoreDraftSession,
+      redirectFromClosedSession: this.redirectFromClosedSession,
       addItem: this.addItem,
       setBtwOverlay: this.setBtwOverlay,
       clearBtwOverlay: this.clearBtwOverlay,
@@ -2200,6 +2205,39 @@ export class CliPiAppState {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.addItem(addError(this.sessionId, `Unable to clean up abandoned session ${sessionId}: ${message}`));
+    }
+  }
+
+  private readonly redirectFromClosedSession = (
+    sessionId: string,
+    action: "archive" | "delete",
+  ): Promise<string> => {
+    const pending = this.lifecycleRedirects.get(sessionId);
+    if (pending) return pending;
+    if (this.sessionId !== sessionId) return Promise.resolve(this.sessionId);
+    const redirect = this.performLifecycleRedirect(sessionId, action);
+    this.lifecycleRedirects.set(sessionId, redirect);
+    void redirect.finally(() => this.lifecycleRedirects.delete(sessionId)).catch(() => undefined);
+    return redirect;
+  };
+
+  private async performLifecycleRedirect(
+    sessionId: string,
+    action: "archive" | "delete",
+  ): Promise<string> {
+    try {
+      if (this.sessionId !== sessionId) return this.sessionId;
+      const nextId = this.enterDraftSession();
+      this.draftPreviousSessionId = "";
+      this.setSessionTitle("");
+      this.clearEntries();
+      const lifecycleLabel = action === "archive" ? "archived" : "deleted";
+      this.addItem(addInfo(nextId, `This session was ${lifecycleLabel}; started a fresh conversation.`, "i"));
+      return nextId;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.addItem(addError(this.sessionId, `Unable to leave ${sessionId}: ${message}`));
+      throw error;
     }
   }
 
