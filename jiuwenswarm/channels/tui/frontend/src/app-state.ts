@@ -365,7 +365,6 @@ export class CliPiAppState {
   private draftCreateRequestId: string | null = null;
   private abandonedDraftCreates = new Map<string, Record<string, unknown>>();
   private abandonedDraftRecoveryRunning = false;
-  private abandonedDraftRecoveryFailures = 0;
   private abandonedDraftRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
   /** `onDiscard` stands in for the reply a frame dropped before sending will never get. */
@@ -519,6 +518,7 @@ export class CliPiAppState {
   private harnessActivateInteraction: HarnessActivateInteraction | null = null;
   private deferTranscriptFrames = false;
   private deferredTranscriptFrames: EventFrame[] = [];
+  private readonly lifecycleRedirects = new Map<string, Promise<string>>();
 
   // ── /switch 公共契约端口（可选；由 index.ts 注入） ──
   /** HandoffPort；未注入时 /switch 通过 CommandContext 回退到 NOT_SUPERVISED。 */
@@ -548,6 +548,9 @@ export class CliPiAppState {
   private readonly eventDelegate: AppEventDelegate = {
     getConnectionStatus: () => this.connectionStatus,
     getSessionId: () => this.sessionId,
+    redirectFromClosedSession: (sessionId, action) => {
+      void this.redirectFromClosedSession(sessionId, action).catch(() => undefined);
+    },
     setSessionId: (sessionId) => {
       this.sessionId = sessionId;
       this.lastVisibleUserRequest = null;
@@ -1304,6 +1307,7 @@ export class CliPiAppState {
       updateSession: this.updateSession,
       enterDraftSession: this.enterDraftSession,
       restoreDraftSession: this.restoreDraftSession,
+      redirectFromClosedSession: this.redirectFromClosedSession,
       addItem: this.addItem,
       setBtwOverlay: this.setBtwOverlay,
       clearBtwOverlay: this.clearBtwOverlay,
@@ -2186,7 +2190,6 @@ export class CliPiAppState {
     if (this.connectionStatus !== "connected" || this.stopped) return;
     if (this.abandonedDraftRecoveryRunning) return;
     this.abandonedDraftRecoveryRunning = true;
-    let uncertainFailure = false;
     try {
       for (const [draftId, params] of this.abandonedDraftCreates) {
         if (this.connectionStatus !== "connected") break;
@@ -2209,9 +2212,7 @@ export class CliPiAppState {
       }
     } finally {
       this.abandonedDraftRecoveryRunning = false;
-      this.abandonedDraftRecoveryFailures = uncertainFailure ? this.abandonedDraftRecoveryFailures + 1 : 0;
-      const delay = Math.min(5000 * 2 ** Math.min(this.abandonedDraftRecoveryFailures - 1, 6), 300000);
-      this.scheduleAbandonedDraftRecovery(uncertainFailure ? delay : 5000);
+      this.scheduleAbandonedDraftRecovery(5000);
     }
   }
 
@@ -2239,6 +2240,39 @@ export class CliPiAppState {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.addItem(addError(this.sessionId, `Unable to clean up abandoned session ${sessionId}: ${message}`));
+    }
+  }
+
+  private readonly redirectFromClosedSession = (
+    sessionId: string,
+    action: "archive" | "delete",
+  ): Promise<string> => {
+    const pending = this.lifecycleRedirects.get(sessionId);
+    if (pending) return pending;
+    if (this.sessionId !== sessionId) return Promise.resolve(this.sessionId);
+    const redirect = this.performLifecycleRedirect(sessionId, action);
+    this.lifecycleRedirects.set(sessionId, redirect);
+    void redirect.finally(() => this.lifecycleRedirects.delete(sessionId)).catch(() => undefined);
+    return redirect;
+  };
+
+  private async performLifecycleRedirect(
+    sessionId: string,
+    action: "archive" | "delete",
+  ): Promise<string> {
+    try {
+      if (this.sessionId !== sessionId) return this.sessionId;
+      const nextId = this.enterDraftSession();
+      this.draftPreviousSessionId = "";
+      this.setSessionTitle("");
+      this.clearEntries();
+      const lifecycleLabel = action === "archive" ? "archived" : "deleted";
+      this.addItem(addInfo(nextId, `This session was ${lifecycleLabel}; started a fresh conversation.`, "i"));
+      return nextId;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.addItem(addError(this.sessionId, `Unable to leave ${sessionId}: ${message}`));
+      throw error;
     }
   }
 

@@ -16,6 +16,7 @@ generated: true
 |---|
 | [agent_gateway/channel_manager/im_platforms/xiaoyi](#module-agent_gateway-channel_manager-im_platforms-xiaoyi) |
 | [agent_gateway/message_handler](#module-agent_gateway-message_handler) |
+| [gateway/channel_manager/tui](#module-gateway-channel_manager-tui) |
 | [gateway/channel_manager/web](#module-gateway-channel_manager-web) |
 | [jiuwenswarm](#module-jiuwenswarm) |
 | [jiuwenswarm/agents/harness/code/rails/heartbeat](#module-jiuwenswarm-agents-harness-code-rails-heartbeat) |
@@ -25,6 +26,7 @@ generated: true
 | [jiuwenswarm/agents/harness/team](#module-jiuwenswarm-agents-harness-team) |
 | [jiuwenswarm/agents/swarm](#module-jiuwenswarm-agents-swarm) |
 | [jiuwenswarm/channels/tui](#module-jiuwenswarm-channels-tui) |
+| [jiuwenswarm/channels/tui/frontend](#module-jiuwenswarm-channels-tui-frontend) |
 | [jiuwenswarm/channels/web](#module-jiuwenswarm-channels-web) |
 | [jiuwenswarm/channels/web/frontend](#module-jiuwenswarm-channels-web-frontend) |
 | [jiuwenswarm/channels/web/frontend/src/components/ui/EntityHeader](#module-jiuwenswarm-channels-web-frontend-src-components-ui-EntityHeader) |
@@ -42,6 +44,7 @@ generated: true
 | [jiuwenswarm/server/ipc](#module-jiuwenswarm-server-ipc) |
 | [jiuwenswarm/server/runtime](#module-jiuwenswarm-server-runtime) |
 | [jiuwenswarm/server/runtime/agent_adapter](#module-jiuwenswarm-server-runtime-agent_adapter) |
+| [jiuwenswarm/server/runtime/session](#module-jiuwenswarm-server-runtime-session) |
 | [jiuwenswarm/server/runtime/skill](#module-jiuwenswarm-server-runtime-skill) |
 | [jiuwenswarm/server/supervisor](#module-jiuwenswarm-server-supervisor) |
 | [jiuwenswarm/server/worker](#module-jiuwenswarm-server-worker) |
@@ -70,12 +73,21 @@ generated: true
 |---|---|---|---|---|
 | [B_20261028_1445_xiaoyi-team-join-delivery](gateway/channel_manager/im_platforms/xiaoyi/B_20261028_1445_xiaoyi-team-join-delivery.md) | B | 小艺成员加入团队后仅在通知栏收到 Team Leader 消息 | zhongxiaotian | 无独立 D：当前团队席位和 fan-out 契约未变化，本次仅修复小艺平台任务生命周期。 |
 
+<a id="module-gateway-channel_manager-tui"></a>
+
+## gateway/channel_manager/tui
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [B_20261031_1340_draft-dispatch-lifecycle-events](jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
+
 <a id="module-gateway-channel_manager-web"></a>
 
 ## gateway/channel_manager/web
 
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
+| [B_20261031_1340_draft-dispatch-lifecycle-events](jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
 | [B_20261102_1644_cron-web-default-project-id](gateway/channel_manager/B_20261102_1644_cron-web-default-project-id.md) | B | 前端未选项目创建定时任务落库 project_id 回退为空串 | kdgmpw | 无独立 D：恢复 4b00671f6（#5713）已实现的行为，属于对该修复在企业版合入后被回退的局部回归修复，无独立设计。 |
 
 <a id="module-jiuwenswarm"></a>
@@ -144,6 +156,14 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
 | [B_20261103_1451_hub-default-url-consistency](jiuwenswarm/channels/web/B_20261103_1451_hub-default-url-consistency.md) | B | Swarm Skills Hub 默认地址前后端/文档不一致导致回退域名不可达 | openjiuwen_ai | 无独立 D：纯默认值与文档文案对齐修复，无独立设计；后端默认值（hub_client.DEFAULT_HUB_BASE_URL）与 README 已是正确口径。 |
+
+<a id="module-jiuwenswarm-channels-tui-frontend"></a>
+
+## jiuwenswarm/channels/tui/frontend
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [B_20261031_1340_draft-dispatch-lifecycle-events](jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
 
 <a id="module-jiuwenswarm-channels-web"></a>
 
@@ -309,6 +329,14 @@ generated: true
 | [B_20261031_1042_pr9317-review](jiuwenswarm/server/B_20261031_1042_pr9317-review.md) | B | PR 9317 插件模式校验与 Front 遗留启动链清理 | xinyang_bali | 无独立 D：根据 openJiuwen-bot 检视意见清理现有实现，不引入新接口或架构方案，无独立 D。 |
 | [B_20261031_1053_atomgit-review](jiuwenswarm/server/B_20261031_1053_atomgit-review.md) | B | PR 9317 AtomGit 取消、补丁兼容与注销恢复修复 | xinyang_bali | 无独立 D：根据机器人检视修复现有资源生命周期和可选补丁边界，不引入独立方案。 |
 | [B_20261106_1132_organization-round-cleanup](jiuwenswarm/agents/swarm/B_20261106_1132_organization-round-cleanup.md) | B | 组织回合澄清等待、失败尝试与初次建卡取消的收尾修复 | “ZhangRan-Zora | 无独立 D：按 PR 9636 三条检视意见修复既有组织生命周期边界，无独立设计。 |
+
+<a id="module-jiuwenswarm-server-runtime-session"></a>
+
+## jiuwenswarm/server/runtime/session
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [B_20261031_1340_draft-dispatch-lifecycle-events](jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
 
 <a id="module-jiuwenswarm-server-runtime-skill"></a>
 

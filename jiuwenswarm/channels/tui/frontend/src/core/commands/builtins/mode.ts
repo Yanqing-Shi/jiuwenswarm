@@ -95,10 +95,7 @@ export async function switchMode(
   } catch (error) {
     if (!isCurrentSession()) return false;
     const message = error instanceof Error ? error.message : String(error);
-    const guidance = requestErrorCode(error) === "SESSION_BUSY"
-      ? " Stop the current work (Ctrl+C), then retry /mode."
-      : "";
-    ctx.addItem(makeItem(sessionId, "error", `Mode switch failed: ${message}.${guidance}`, "m"));
+    ctx.addItem(makeItem(sessionId, "error", `Mode switch failed: ${message}`, "m"));
     return false;
   }
   if (!isCurrentSession()) return false;

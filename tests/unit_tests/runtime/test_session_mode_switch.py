@@ -296,37 +296,6 @@ async def test_cold_chat_reclassifies_after_remote_switch_before_claim(mode_sess
     assert AgentRuntime.session_work_kind(normalized) is SessionWorkKind.TEAM_REQUEST
 
 
-@pytest.mark.asyncio
-async def test_adopted_tui_chat_reads_authoritative_metadata_once(mode_session, monkeypatch):
-    from types import SimpleNamespace
-    from jiuwenswarm.runtime.session.model import RuntimeSessionState
-
-    runtime = AgentRuntime(agent_manager=AsyncMock(), initializer=AsyncMock())
-    monkeypatch.setattr(
-        runtime._session_coordinator, "snapshot_session",
-        lambda _session_id: SimpleNamespace(state=RuntimeSessionState.READY),
-    )
-    registered = AsyncMock()
-    monkeypatch.setattr(runtime, "_ensure_session_registered", registered)
-    original_read = session_metadata.get_session_metadata
-    reads = []
-
-    def read_metadata(*args, **kwargs):
-        reads.append(kwargs)
-        return original_read(*args, **kwargs)
-
-    monkeypatch.setattr(session_metadata, "get_session_metadata", read_metadata)
-    request = AgentRequest(
-        request_id="warm-chat", channel_id="tui", session_id="one-session",
-        req_method=ReqMethod.CHAT_SEND, params={"mode": "agent.code.normal", "query": "hello"},
-    )
-    normalized = await runtime._normalize_tui_chat_after_claim(request)
-    assert normalized.params["mode"] == "agent.code.normal"
-    assert len(reads) == 1
-    assert reads[0]["cache_bust"] is True
-    registered.assert_awaited_once_with(request)
-
-
 def test_mode_set_is_a_forwarded_protocol_method():
     assert ReqMethod("mode.set") is ReqMethod.MODE_SET
     assert ReqMethod("mode.get") is ReqMethod.MODE_GET

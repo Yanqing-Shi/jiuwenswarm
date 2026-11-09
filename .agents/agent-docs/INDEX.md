@@ -20,6 +20,7 @@ generated: true
 | [agent_teams/workflow](#module-agent_teams-workflow) |
 | [deploy/yuanrong](#module-deploy-yuanrong) |
 | [docs](#module-docs) |
+| [gateway/channel_manager/tui](#module-gateway-channel_manager-tui) |
 | [gateway/channel_manager/web](#module-gateway-channel_manager-web) |
 | [jiuwenswarm](#module-jiuwenswarm) |
 | [jiuwenswarm/agents/harness](#module-jiuwenswarm-agents-harness) |
@@ -133,6 +134,14 @@ generated: true
 | [D-20261104-1141-npc-team-member-sessions](designs/active/D-20261104-1141-npc-team-member-sessions/design.md) | D | NPC 主从会话与按需搜索工具 | kdgmpw | — |
 | [F_20261104_1225_npc-team-member-sessions](features/F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
 
+<a id="module-gateway-channel_manager-tui"></a>
+
+## gateway/channel_manager/tui
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [B_20261031_1340_draft-dispatch-lifecycle-events](bugfix/jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
+
 <a id="module-gateway-channel_manager-web"></a>
 
 ## gateway/channel_manager/web
@@ -140,6 +149,7 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
 | [F_20261031_1139_gateway-session-e2a](features/F_20261031_1139_gateway-session-e2a.md) | F | Web 会话管理统一经 E2A 交由 Server 执行 | ruiqiang2 | 无独立 D：用户确认的 Gateway 解耦任务 4.1，沿用 develop 个人版现有链路，无独立设计编号。 |
+| [B_20261031_1340_draft-dispatch-lifecycle-events](bugfix/jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
 | [B_20261102_1644_cron-web-default-project-id](bugfix/gateway/channel_manager/B_20261102_1644_cron-web-default-project-id.md) | B | 前端未选项目创建定时任务落库 project_id 回退为空串 | kdgmpw | 无独立 D：恢复 4b00671f6（#5713）已实现的行为，属于对该修复在企业版合入后被回退的局部回归修复，无独立设计。 |
 | [S_02_app-role-npc-team](specs/jiuwenswarm/server/runtime/agent_adapter/S_02_app-role-npc-team.md) | S | app_role 的团队 NPC 与轻量咨询契约 | kdgmpw | — |
 
@@ -322,6 +332,7 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
 | [F_20261110_1438_opencode-go-provider](features/F_20261110_1438_opencode-go-provider.md) | F | 新增 opencode-go 模型供应商 | wang_njust_608 | 无独立 D：需求与方案由本地 Spec Kit 资产 specs/001-opencode-go-provider/ 承载（spec/plan/tasks，仅本地保留、不入库），未另建 .agents/agent-docs 下的 D 编号；上游供应商预设归 agent-gateway 仓。 |
+| [B_20261031_1340_draft-dispatch-lifecycle-events](bugfix/jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
 
 <a id="module-jiuwenswarm-channels-web"></a>
 
@@ -676,6 +687,7 @@ generated: true
 | [D-20261104-1141-npc-team-member-sessions](designs/active/D-20261104-1141-npc-team-member-sessions/design.md) | D | NPC 主从会话与按需搜索工具 | kdgmpw | — |
 | [F_20261103_1501_app-role-session](features/app-role-session.md) | F | 保留基础系统提示的轻量 NPC 会话 | kdgmpw | [D-20261103-1444-app-role-session](designs/active/D-20261103-1444-app-role-session/design.md) |
 | [F_20261104_1225_npc-team-member-sessions](features/F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
+| [B_20261031_1340_draft-dispatch-lifecycle-events](bugfix/jiuwenswarm/channels/tui/B_20261031_1340_draft-dispatch-lifecycle-events.md) | B | TUI draft dispatch and cross-window lifecycle events | Yanqing-Shi | 无独立 D：Narrow repair of the TUI draft and session lifecycle behavior in PR 10243; no independent D document. |
 | [S_02_app-role-npc-team](specs/jiuwenswarm/server/runtime/agent_adapter/S_02_app-role-npc-team.md) | S | app_role 的团队 NPC 与轻量咨询契约 | kdgmpw | — |
 
 <a id="module-jiuwenswarm-server-runtime-skill"></a>

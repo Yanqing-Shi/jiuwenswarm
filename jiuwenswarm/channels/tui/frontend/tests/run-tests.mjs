@@ -220,24 +220,6 @@ const capturedResponseError = await responseError;
 assert.equal(capturedResponseError.code, "MODE_CONFLICT");
 assert.equal(capturedResponseError.message, "session mode changed");
 
-const timeoutClient = Object.create(WsClient.prototype);
-timeoutClient.pending = new Map();
-timeoutClient.ws = { readyState: 1, send: () => {} };
-await assert.rejects(timeoutClient.request("timed", "mode.set", {}, 1), (error) => {
-  assert.equal(error.code, "REQUEST_TIMEOUT");
-  return true;
-});
-
-let codedAttempts = 0;
-modeSwitchContext.request = async (method, params) => {
-  assert.equal(method, "mode.set");
-  codedAttempts += 1;
-  if (codedAttempts === 1) throw Object.assign(new Error("changed transport wording"), { code: "REQUEST_TIMEOUT" });
-  return { mode: params.mode, changed: true };
-};
-assert.equal(await switchMode(modeSwitchContext, "agent.work.normal"), true);
-assert.equal(codedAttempts, 2);
-
 modeSwitchContext.request = async (method) => {
   throw new Error(method === "mode.set" ? "AgentServer WebSocket connection closed" : "disconnected");
 };
@@ -530,7 +512,6 @@ await busyModeScreen.handleSubmit("/mode team.work");
 assert.equal(busyModeRequests.length, 1);
 assert.equal(busyModeRequests[0].method, "mode.set");
 assert.ok(busyModeEvents.some((item) => /session is busy/.test(item.content)));
-assert.ok(busyModeEvents.some((item) => /Ctrl\+C.*retry \/mode/.test(item.content)));
 
 const swarmflowRequests = [];
 const swarmflowEvents = [];
@@ -1192,6 +1173,65 @@ assert.equal(runPlanModeExited("agent.work.plan", "agent"), "agent.work.normal")
 assert.equal(runPlanModeExited("agent.code.plan", "code.normal"), "agent.code.normal");
 assert.equal(runPlanModeExited("team.work.plan", "team"), "team.work.normal");
 assert.equal(runPlanModeExited("team.code.plan", "code.team"), "team.code.normal");
+
+for (const [event, payload, action] of [
+  ["session.archived", { session_id: "closed-session" }, "archive"],
+  ["session.deleted", { session_id: "closed-session" }, "delete"],
+  [
+    "session.lifecycle.updated",
+    {
+      session_id: "closed-session",
+      execution_blocked: true,
+      lifecycle_operation: { kind: "archive" },
+    },
+    "archive",
+  ],
+  [
+    "session.lifecycle.updated",
+    {
+      session_id: "closed-session",
+      execution_blocked: true,
+      lifecycle_operation: { kind: "delete" },
+    },
+    "delete",
+  ],
+]) {
+  let redirected;
+  const lifecycleDelegate = {
+    getSessionId: () => "closed-session",
+    redirectFromClosedSession: (sessionId, lifecycleAction) => {
+      redirected = [sessionId, lifecycleAction];
+    },
+  };
+  assert.equal(handleIncomingFrame(lifecycleDelegate, { type: "event", event, payload }), true);
+  assert.deepEqual(redirected, ["closed-session", action]);
+}
+for (const payload of [
+  {
+    session_id: "another-session",
+    execution_blocked: true,
+    lifecycle_operation: { kind: "delete" },
+  },
+  {
+    session_id: "closed-session",
+    execution_blocked: false,
+    lifecycle_operation: { kind: "delete" },
+  },
+]) {
+  let redirected = false;
+  const lifecycleDelegate = {
+    getSessionId: () => "closed-session",
+    redirectFromClosedSession: () => {
+      redirected = true;
+    },
+  };
+  handleIncomingFrame(lifecycleDelegate, {
+    type: "event",
+    event: "session.lifecycle.updated",
+    payload,
+  });
+  assert.equal(redirected, false);
+}
 
 const expandedTeamLines = buildAppScreenLines(teamSnapshot, {
   ...teamLayoutOptions,

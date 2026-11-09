@@ -4276,17 +4276,6 @@ class AgentRuntime:
             and request.session_id
             and request.req_method in self._chat_turn_methods()
         ):
-            # An already-adopted Session needs only the authoritative route read
-            # in normalize_request. Cold Sessions still check metadata before
-            # adoption, then read again after claiming to avoid a mode race.
-            snapshot = self._session_coordinator.snapshot_session(request.session_id)
-            if snapshot is not None and snapshot.state not in {
-                RuntimeSessionState.QUIESCING,
-                RuntimeSessionState.CLOSED,
-            }:
-                await self._ensure_session_registered(request)
-                return self.normalize_request(request)
-
             from jiuwenswarm.server.runtime.session.session_metadata import get_session_metadata
 
             try:

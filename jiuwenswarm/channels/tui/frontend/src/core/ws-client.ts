@@ -86,7 +86,7 @@ export class WsClient {
         ws.close();
       }
     }
-    this.rejectAllPending(Object.assign(new Error("disconnected"), { code: "TRANSPORT_DISCONNECTED" }));
+    this.rejectAllPending(new Error("disconnected"));
     this.setStatus("idle");
   }
 
@@ -118,7 +118,7 @@ export class WsClient {
       };
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(Object.assign(new Error(`request timeout: ${method}`), { code: "REQUEST_TIMEOUT" }));
+        reject(new Error(`request timeout: ${method}`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.send(frame);

@@ -305,4 +305,19 @@ assert.ok(recoveryClient.requests.some(({ method }) => method === "session.delet
 assert.equal(recoveryState.abandonedDraftRecoveryFailures, 0);
 recoveryState.stop();
 
+const closeClient = new FakeClient();
+const closeState = new CliPiAppState(closeClient, "closing-session");
+closeState.connectionStatus = "connected";
+closeState.initializeBootSession();
+await closeState.bootSessionCreation;
+assert.equal(closeClient.requests.length, 1, "explicit --session still registers immediately");
+const redirectedId = await closeState.redirectFromClosedSession("closing-session", "archive");
+assert.notEqual(redirectedId, "closing-session");
+assert.equal(closeClient.requests.filter(({ method }) => method === "session.create").length, 1,
+  "archive redirect must not persist an empty replacement");
+closeState.sendMessage("next task");
+await waitFor(() => closeClient.frames.some((frame) => frame.method === "chat.send"));
+assert.equal(closeClient.requests.filter(({ method }) => method === "session.create")[1].params.previous_session_id, "");
+closeState.stop();
+
 console.log("draft session tests passed");

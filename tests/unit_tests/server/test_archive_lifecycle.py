@@ -38,6 +38,7 @@ async def test_gateway_session_events_carry_project_id(archive, monkeypatch):
 
     service, create, root, _ = archive
     create()
+    complete_archive = False
 
     async def fetch(**kwargs):
         params, method = kwargs["params"], kwargs["req_method"].value
@@ -46,6 +47,8 @@ async def test_gateway_session_events_carry_project_id(archive, monkeypatch):
                 await service.session(sid, "archive", "web")
                 for sid in params["session_ids"]
             ]
+            if complete_archive:
+                results = [dict(item, finalizing=False, stop_pending=False) for item in results]
             return True, dict(
                 succeeded_count=len(results), failed_count=0, results=results
             )
@@ -71,17 +74,13 @@ async def test_gateway_session_events_carry_project_id(archive, monkeypatch):
     await methods["session.archive"](
         object(), "req", {"session_ids": ["sess_a"]}, None, "alice"
     )
-    accepted = channel.send_response.await_args.kwargs["payload"]["results"][0]
-    assert accepted["project_id"] == "default"
-    assert accepted["stop_pending"] is True
+    # Pending cleanup must not be announced as a completed archive.
     assert events == []
-    # The fixture drains real finalizers, but the first response remains the
-    # acceptance snapshot. A repeated request now observes completed cleanup.
-    assert (root / "sessions_archived" / "sess_a").is_dir()
+    complete_archive = True
     await methods["session.archive"](
-        object(), "req-completed", {"session_ids": ["sess_a"]}, None, "alice"
+        object(), "req-complete", {"session_ids": ["sess_a"]}, None, "alice"
     )
-    # session.archived 直接事件必须符合 §5.10.11 契约：project_id 必返。
+    # The completed session.archived event carries the project ID.
     assert len(events) == 1
     event, payload = events[0]
     assert event == "session.archived"
@@ -413,24 +412,190 @@ async def test_archive_flushes_accepted_writes_without_stopping(archive, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_running_session_archive_and_delete_are_accepted(archive):
+async def test_running_session_cannot_be_archived_or_deleted(archive):
     service, create, root, runtime = archive
     create()
     runtime.is_session_running.return_value = True
 
-    archived = await service.session("sess_a", "archive", "web")
-    assert archived["ok"] is True
-    assert archived["finalizing"] is True
-    # Cleanup runs in the background but still stops the live runtime.
-    runtime.stop_session_for_archive.assert_awaited_once()
-    assert not (root / "sessions/sess_a").exists()
+    with pytest.raises(lc.LifecycleError, match="running task"):
+        await service.session("sess_a", "archive", "web")
+    runtime.stop_session_for_archive.assert_not_awaited()
+    assert (root / "sessions/sess_a").exists()
+    assert not (root / "sessions_archived/sess_a").exists()
+    assert lc.state("session", "sess_a").get("blocked") is False
+    assert lc.state("session", "sess_a")["operation"]["status"] == "completed"
+    assert lc.state("session", "sess_a")["operation"]["result"] == {"accepted": False}
+
+    runtime.is_session_running.return_value = False
+    await service.session("sess_a", "archive", "web")
     assert (root / "sessions_archived/sess_a").exists()
+    assert any(
+        entry["kind"] == "archive" and entry["completed"]
+        for entry in lc.event_snapshots()
+    )
 
     create("sess_b")
+    runtime.is_session_running.return_value = True
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("sess_b", "delete", "web")
+    assert error.value.code == "SESSION_BUSY"
+    assert (root / "sessions/sess_b").exists()
+    assert lc.state("session", "sess_b").get("blocked") is False
+    assert lc.state("session", "sess_b")["operation"]["status"] == "completed"
+    assert lc.state("session", "sess_b")["operation"]["result"] == {"accepted": False}
+    runtime.delete_session.assert_not_awaited()
+
+    runtime.is_session_running.return_value = False
     deleted = await service.session("sess_b", "delete", "web")
     assert deleted["ok"] is True
-    assert deleted["finalizing"] is True
     runtime.delete_session.assert_awaited_once()
+    assert any(
+        entry["kind"] == "delete" and entry["completed"]
+        for entry in lc.event_snapshots()
+    )
+
+
+@pytest.mark.asyncio
+async def test_idle_probe_begin_failure_does_not_leave_a_fence(archive, monkeypatch):
+    service, create, _, _ = archive
+    create()
+
+    def fail_begin(*args, **kwargs):
+        raise lc.LifecycleError("NOT_FOUND", "resource was permanently deleted")
+
+    monkeypatch.setattr(lc, "begin", fail_begin)
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("sess_a", "archive", "web")
+
+    assert error.value.code == "NOT_FOUND"
+    assert lc.state("session", "sess_a").get("blocked") is not True
+    lc.guard("sess_a")
+
+
+@pytest.mark.asyncio
+async def test_idle_probe_fence_has_recoverable_operation(archive):
+    service, create, _, runtime = archive
+    create()
+
+    def running_probe(session_id):
+        value = lc.state("session", session_id)
+        operation = value["operation"]
+        assert operation["phase"] == "check_idle"
+        assert not lc.logically_archived(value)
+        assert lc.projection("session", session_id, value=value)["lifecycle_operation"] is None
+        assert service.list_sessions({})["sessions"] == []
+        inventory = service.project_session_inventory("default")
+        assert len(inventory) == 1
+        assert inventory[0].active and not inventory[0].logically_archived
+        assert lc.event_snapshots() == []
+        with pytest.raises(lc.LifecycleError) as error:
+            lc.guard(session_id)
+        assert error.value.code == "OPERATION_IN_PROGRESS"
+        return True
+
+    runtime.is_session_running.side_effect = running_probe
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("sess_a", "archive", "web")
+
+    assert error.value.code == "SESSION_BUSY"
+    assert lc.state("session", "sess_a")["operation"]["status"] == "completed"
+    assert lc.state("session", "sess_a")["operation"]["phase"] == "not_accepted"
+    assert lc.event_snapshots() == []
+    lc.guard("sess_a")
+
+
+@pytest.mark.asyncio
+async def test_recovery_clears_orphan_idle_fence(archive):
+    service, create, root, _ = archive
+    create()
+    lc.set_visibility("session", "sess_a", blocked=True, write_blocked=False)
+
+    service.start_recovery()
+    await _wait_until(lambda: lc.state("session", "sess_a").get("blocked") is False)
+
+    assert (root / "sessions/sess_a").exists()
+    lc.guard("sess_a")
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_aborts_unaccepted_idle_check(archive):
+    service, create, root, _ = archive
+    create()
+    lc.begin("session", "sess_a", "archive", initial_phase="check_idle")
+
+    service.start_recovery()
+    await _wait_until(
+        lambda: lc.state("session", "sess_a")["operation"]["status"] == "completed"
+    )
+
+    assert lc.state("session", "sess_a")["blocked"] is False
+    assert lc.state("session", "sess_a")["operation"]["result"] == {"accepted": False}
+    assert lc.event_snapshots() == []
+    assert (root / "sessions/sess_a").exists()
+    assert not (root / "sessions_archived/sess_a").exists()
+    lc.guard("sess_a")
+    await service.close()
+
+
+def test_legacy_completed_idle_check_does_not_emit_terminal_event(archive):
+    _, create, _, _ = archive
+    create()
+    lc.begin("session", "sess_a", "archive", initial_phase="check_idle")
+    lc.complete("session", "sess_a")
+
+    assert lc.event_snapshots() == []
+    assert not lc.logically_archived(lc.state("session", "sess_a"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["archive", "delete"])
+async def test_busy_rejection_does_not_emit_completion_on_gateway_poll(
+    archive, monkeypatch, action
+):
+    from agent_gateway.channel_manager.web import lifecycle_handlers
+
+    service, create, _, runtime = archive
+    create()
+    runtime.is_session_running.return_value = True
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("sess_a", action, "web")
+    assert error.value.code == "SESSION_BUSY"
+
+    client = object()
+    events = []
+    channel = SimpleNamespace(
+        channel_id="web",
+        clients=[client],
+        connection_user_id=lambda ws: "u1",
+        register_method=lambda name, handler: None,
+        send_event=AsyncMock(side_effect=lambda ws, event, payload: events.append(event)),
+        send_response=AsyncMock(),
+        clear_session_busy=Mock(),
+    )
+    polls = 0
+    original_sleep = asyncio.sleep
+
+    async def fetch(**kwargs):
+        nonlocal polls
+        polls += 1
+        return True, {"events": lc.event_snapshots()}
+
+    async def after_poll(delay):
+        if polls >= 2:
+            channel.clients.clear()
+        await original_sleep(0)
+
+    monkeypatch.setattr(lifecycle_handlers, "fetch_agent_unary", fetch)
+    monkeypatch.setattr(lifecycle_handlers.asyncio, "sleep", after_poll)
+    lifecycle_handlers.register_lifecycle_handlers(channel, lambda: None, lambda: None)
+    channel.ensure_lifecycle_watch("u1")
+    watcher = next(task for task in asyncio.all_tasks() if task.get_name() == "web-lifecycle-events")
+    await asyncio.wait_for(watcher, 1)
+
+    assert polls == 2
+    assert events == []
+    channel.clear_session_busy.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -520,6 +685,17 @@ async def test_local_runner_team_execution_controls_lifecycle_busy(
     runtime._session_coordinator = SimpleNamespace(snapshot_session=lambda sid: None)
     runtime.is_session_running = lambda sid: AgentRuntime.is_session_running(runtime, sid)
 
+    if phase in {"running", "pausing"}:
+        from jiuwenswarm.server.runtime.session import lifecycle
+
+        with pytest.raises(lifecycle.LifecycleError, match="running task"):
+            await service.session("sess_a", action, "web")
+        assert lifecycle.state("session", "sess_a")["blocked"] is False
+        assert (root / "sessions/sess_a").exists()
+        assert not (root / "sessions_archived/sess_a").exists()
+        runtime.stop_session_for_archive.assert_not_awaited()
+        return
+
     result = await service.session("sess_a", action, "web")
     assert result["ok"] is True
     assert result["finalizing"] is True
@@ -528,7 +704,7 @@ async def test_local_runner_team_execution_controls_lifecycle_busy(
         assert (root / "sessions_archived/sess_a").exists()
     else:
         runtime.delete_session.assert_awaited_once()
-    if phase in {"running", "pausing"} or action == "delete":
+    if action == "delete":
         runtime.stop_session_for_archive.assert_awaited_once()
 
 
@@ -761,18 +937,20 @@ async def test_project_batch_archive_partial_and_delete_only_archived(archive):
     await service.session("sess_archived", "archive", "web")
     runtime.is_session_running.side_effect = lambda sid: sid == "sess_busy"
     result = await service.project_batch(project.project_id, "archive", "web")
-    assert result["succeeded_count"] == 2
-    assert result["failed_count"] == 0
+    assert result["succeeded_count"] == 1
+    assert result["failed_count"] == 1
     assert {item["session_id"] for item in result["results"]} == {
         "sess_idle",
         "sess_busy",
     }
-    assert all(item["ok"] and item["finalizing"] for item in result["results"])
-    # Only the running session needed a stop; idle archives skip the runtime.
-    runtime.stop_session_for_archive.assert_awaited_once()
-    assert (root / "sessions_archived/sess_busy").exists()
+    busy_result = next(item for item in result["results"] if item["session_id"] == "sess_busy")
+    assert busy_result["ok"] is False
+    assert busy_result["code"] == "SESSION_BUSY"
+    assert (root / "sessions_archived/sess_idle").exists()
+    assert (root / "sessions/sess_busy").exists()
+    runtime.stop_session_for_archive.assert_not_awaited()
     assert lc.state("project", project.project_id) == {}
-    assert service.list_sessions({"project_id": project.project_id})["total"] == 3
+    assert service.list_sessions({"project_id": project.project_id})["total"] == 2
     lc.guard(project_id=project.project_id)
 
     async def delete_session(*, channel_id, session_id):
@@ -781,8 +959,9 @@ async def test_project_batch_archive_partial_and_delete_only_archived(archive):
 
     runtime.delete_session.side_effect = delete_session
     result = await service.project_batch(project.project_id, "delete_archived", "web")
-    assert result["succeeded_count"] == 3 and result["failed_count"] == 0
+    assert result["succeeded_count"] == 2 and result["failed_count"] == 0
     assert set(service.project_sessions(project.project_id)) == {
+        "sess_busy",
         "cron_run",
         "heartbeat_run",
     }
@@ -1395,19 +1574,17 @@ async def test_pin_reindex_failure_keeps_operation_retryable(archive, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_running_team_round_archive_is_accepted(archive):
+async def test_running_team_round_cannot_be_archived(archive):
     service, create, _, runtime = archive
     create()
-    # A running round no longer rejects the action; the finalizer stops it.
     runtime.is_session_running = Mock(return_value=True)
     runtime.has_parked_team_streams = Mock(return_value=False)
     runtime.is_team_round_finishing = Mock(return_value=True)
 
-    result = await service.session("sess_a", "archive", "web")
-
-    assert result["ok"] is True
-    assert result["finalizing"] is True
-    runtime.stop_session_for_archive.assert_awaited_once()
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("sess_a", "archive", "web")
+    assert error.value.code == "SESSION_BUSY"
+    runtime.stop_session_for_archive.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1745,7 +1922,7 @@ async def test_archive_continues_when_flush_reports_pending(archive, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_delete_stops_heartbeat_instead_of_reporting_busy(archive, monkeypatch):
+async def test_delete_waits_for_heartbeat_to_stop(archive, monkeypatch):
     from jiuwenswarm.runtime.service import AgentRuntime
     from jiuwenswarm.runtime.session import SessionWorkKind
     from jiuwenswarm.runtime.session.model import SessionExecutionState
@@ -1795,8 +1972,13 @@ async def test_delete_stops_heartbeat_instead_of_reporting_busy(archive, monkeyp
     assert await admission.try_begin_heartbeat("heartbeat_run", "run-1")
     assert admission.is_heartbeat_active("heartbeat_run")
     assert runtime.is_session_running("heartbeat_run")
-    # A live heartbeat must not turn delete into a busy rejection: the action
-    # stops the run and its execution, then deletes a settled session.
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("heartbeat_run", "delete", "web")
+    assert error.value.code == "SESSION_BUSY"
+    assert cancelled_runs == []
+    runtime.delete_session.assert_not_awaited()
+
+    await runtime.stop_heartbeat_runs("heartbeat_run")
     assert (await service.session("heartbeat_run", "delete", "web"))["ok"]
     assert cancelled_runs == ["run-1"]
     assert cancelled_executions == ["exec-heartbeat"]
@@ -1806,7 +1988,7 @@ async def test_delete_stops_heartbeat_instead_of_reporting_busy(archive, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_delete_proceeds_when_heartbeat_refuses_to_stop(archive, monkeypatch):
+async def test_delete_rejects_heartbeat_that_refuses_to_stop(archive, monkeypatch):
     from jiuwenswarm.runtime.service import AgentRuntime
     from jiuwenswarm.runtime.session import SessionWorkKind
     from jiuwenswarm.runtime.session.model import SessionExecutionState
@@ -1837,13 +2019,11 @@ async def test_delete_proceeds_when_heartbeat_refuses_to_stop(archive, monkeypat
     runtime.has_parked_team_streams = lambda sid: AgentRuntime.has_parked_team_streams(probe, sid)
     runtime.stop_heartbeat_runs = lambda sid: AgentRuntime.stop_heartbeat_runs(probe, sid)
     assert await admission.try_begin_heartbeat("heartbeat_run", "run-1")
-    result = await service.session("heartbeat_run", "delete", "web")
-    # A refused heartbeat no longer blocks the user-visible deletion.  The
-    # finalizer still attempts the stop; write fencing protects the directory
-    # from a late heartbeat write.
-    assert result["ok"] is True
-    assert result["finalizing"] is True
-    runtime.delete_session.assert_awaited_once()
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("heartbeat_run", "delete", "web")
+    assert error.value.code == "SESSION_BUSY"
+    assert admission.is_heartbeat_active("heartbeat_run")
+    runtime.delete_session.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1852,24 +2032,16 @@ async def test_archive_releases_subagents_instead_of_reporting_busy(archive):
 
     service, create, _, runtime = archive
     create("subagent_run")
-    released: list[str] = []
-
-    async def release(session_id, *, channel_id="", reason="session_deleted"):
-        released.append(session_id)
-        # 释放后会话落定：常驻 subagent 不再让 is_session_running 判真。
-        runtime.is_session_running = Mock(return_value=False)
-        return True
-
     runtime.is_session_running = Mock(return_value=True)
-    runtime.stop_subagent_runtimes = release
-    # A resident subagent must not turn archive into a busy rejection: the
-    # action releases it, then reads a settled session.
-    assert (await service.session("subagent_run", "archive", "web"))["ok"]
-    assert released == ["subagent_run"]
+    runtime.stop_subagent_runtimes = AsyncMock()
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("subagent_run", "archive", "web")
+    assert error.value.code == "SESSION_BUSY"
+    runtime.stop_subagent_runtimes.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_delete_releases_finishing_subagents(archive):
+async def test_delete_waits_for_finishing_subagents(archive):
     service, create, _, runtime = archive
     create("subagent_finishing")
 
@@ -1879,11 +2051,16 @@ async def test_delete_releases_finishing_subagents(archive):
     runtime.is_session_running = Mock(return_value=True)
     runtime.stop_subagent_runtimes = release
     runtime.is_subagent_finishing = lambda sid, *, channel_id="": True
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("subagent_finishing", "delete", "web")
+    assert error.value.code == "SESSION_BUSY"
+    runtime.delete_session.assert_not_awaited()
+
+    runtime.is_session_running.return_value = False
     result = await service.session("subagent_finishing", "delete", "web")
     assert result["ok"] is True
     assert result["finalizing"] is True
-    # The resident subagent is released in the background instead of turning
-    # the user's delete into a busy rejection.
+    # A settled session can still release resident subagents during cleanup.
     runtime.delete_session.assert_awaited_once()
 
 
@@ -1941,7 +2118,7 @@ async def test_subagent_release_falls_back_to_channel_agent_without_owner():
 
 
 @pytest.mark.asyncio
-async def test_archive_releases_subagents_through_the_session_own_channel(archive):
+async def test_archive_does_not_stop_a_running_subagent(archive):
     service, create, _, runtime = archive
     directory = create("cli_subagent")
     lc.atomic_json(
@@ -1955,19 +2132,12 @@ async def test_archive_releases_subagents_through_the_session_own_channel(archiv
         ),
     )
     sm._METADATA_CACHE.clear()
-    seen: list[str] = []
-
-    async def release(session_id, *, channel_id="", reason="session_deleted"):
-        seen.append(channel_id)
-        runtime.is_session_running = Mock(return_value=False)
-        return True
-
     runtime.is_session_running = Mock(return_value=True)
-    runtime.stop_subagent_runtimes = release
-    assert (await service.session("cli_subagent", "archive", "web"))["ok"]
-    # Agents are cached per channel, so the release has to reach the Session's
-    # own channel rather than the one serving this request.
-    assert seen == ["cli"]
+    runtime.stop_subagent_runtimes = AsyncMock()
+    with pytest.raises(lc.LifecycleError) as error:
+        await service.session("cli_subagent", "archive", "web")
+    assert error.value.code == "SESSION_BUSY"
+    runtime.stop_subagent_runtimes.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -2400,6 +2570,7 @@ async def test_queued_archive_retry_cannot_take_over_new_operation(
     try:
         # Bypass the fixture's synchronous drain while both tasks are queued.
         await SessionArchiveService.session(service, "sess_a", "unarchive", "web")
+        runtime.is_session_running.return_value = False
         await SessionArchiveService.session(service, "sess_a", "archive", "web")
         operation = lc.state("session", "sess_a")["operation"]
         assert operation["operation_id"] != old_operation["operation_id"]
