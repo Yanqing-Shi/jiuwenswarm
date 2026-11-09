@@ -73,6 +73,24 @@ def test_owner_stop_persists_without_changing_session_activity_or_other_metadata
 
 
 @pytest.mark.parametrize("mode", ["sync", "queued", "full"])
+@pytest.mark.parametrize("profile", ["work", "code"])
+def test_old_ui_metadata_cannot_undo_context_handoff(mode, profile):
+    original = _initial_metadata()
+    sid = original["session_id"]
+    sm._write_metadata_sync(sid, original)
+    owner = {"kind": "team", "agent_id": "actual-chief"}
+    if profile == "code":
+        owner["profile"] = "code"
+    journal = {"owner": owner, "pending": None}
+    sm.patch_session_metadata(sid, {"conversation_handoff": journal})
+    _prepare_queue(mode)
+    sm._enqueue_write(sid, {**original, "mode": "agent.work.normal"}, sync_write=mode == "sync")
+    if mode == "queued":
+        _drain_write()
+    assert sm.get_session_metadata(sid, cache_bust=True)["conversation_handoff"] == journal
+
+
+@pytest.mark.parametrize("mode", ["sync", "queued", "full"])
 def test_stale_write_preserves_concurrent_moa_selection_pins_and_rebind(
     monkeypatch: pytest.MonkeyPatch, mode: str,
 ) -> None:

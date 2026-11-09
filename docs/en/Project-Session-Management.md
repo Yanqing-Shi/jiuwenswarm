@@ -17,6 +17,10 @@ TUI `/mode` can switch the current execution mode within one Session ID. `metada
 
 ### Core Concepts
 
+Switching between a single agent and a team within the same `work` or `code` profile transfers the conversation to the actual Team Leader or single agent. This includes member results already received by the Leader, but not members' private conversations. Both normal and plan are supported; entering or leaving plan on the same executor preserves its context. A switch fails immediately while either executor has pending work, tools, or unanswered interactions. Retry after that work settles; switching does not automatically pause it. Switching between `work` and `code` profiles in a Session with an established conversation owner is rejected; it does not transfer context across profiles.
+
+This requires the matching Core conversation handoff APIs. `team.design` and external CLI runtimes are outside the scope. Unknown legacy ownership, missing snapshots, and nonportable file offloads cause explicit errors. Handoff recovery does not guarantee exactly-once tool effects when an already consumed request is retried after a process crash.
+
 | Concept | Description |
 |---------|-------------|
 | **Default projects** | Not persisted; dynamically injected by APIs. `default` is the work default project, `default_code` is the code default project. Rename/remove/pin are forbidden |

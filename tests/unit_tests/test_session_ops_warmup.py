@@ -25,6 +25,66 @@ def _deep_agent_with_empty_context():
 
 
 @pytest.mark.asyncio
+async def test_handoff_checkpoint_takes_precedence_over_public_history(monkeypatch):
+    from openjiuwen.core.context_engine import ContextEngine
+    from jiuwenswarm.agents.harness.common import session_ops_service
+    from jiuwenswarm.server.runtime.session import session_metadata
+
+    messages = [UserMessage(content="A"), AssistantMessage(content="D-generated-by-leader")]
+    state = {"context": {"default_context_id": {"messages": messages}}}
+    session = SimpleNamespace(get_session_id=lambda: "handoff-cold", get_state=state.get)
+    engine = ContextEngine()
+    agent = SimpleNamespace(react_agent=SimpleNamespace(context_engine=engine))
+    monkeypatch.setattr(session_metadata, "get_session_metadata", lambda _: {
+        "conversation_handoff": {"owner": {"kind": "agent", "agent_id": "single"}},
+    })
+    monkeypatch.setattr(session_ops_service, "resolve_live_agent_session", lambda *_: session)
+    monkeypatch.setattr(session_ops_service, "history_exists", lambda _: True)
+    history = MagicMock(side_effect=AssertionError("must not rebuild from public history"))
+    monkeypatch.setattr(session_ops_service, "load_history_records", history)
+
+    assert await session_ops_service.warmup_session_context(deep_agent=agent, session_id="handoff-cold")
+    assert [message.content for message in engine.get_context(session_id="handoff-cold").get_messages()] == [
+        "A", "D-generated-by-leader",
+    ]
+    history.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cold_code_warmup_excludes_work_profile_history(monkeypatch):
+    from openjiuwen.core.context_engine import ContextEngine
+    from jiuwenswarm.agents.harness.common import session_ops_service
+    from jiuwenswarm.server.runtime.session import session_metadata
+
+    state = {}
+    session = SimpleNamespace(get_session_id=lambda: "mixed-profile", get_state=state.get,
+                              update_state=state.update, commit=AsyncMock())
+    engine = ContextEngine()
+    agent = SimpleNamespace(react_agent=SimpleNamespace(context_engine=engine))
+    records = [
+        {"role": "user", "mode": "agent.work.normal", "request_id": "work-1", "content": "WORK_SECRET"},
+        {"role": "assistant", "mode": "agent.work.normal", "request_id": "work-1",
+         "event_type": "chat.final", "content": "work answer"},
+        {"role": "user", "mode": "agent.code.normal", "request_id": "code-1", "content": "CODE_FACT"},
+        {"role": "assistant", "mode": "agent.code.normal", "request_id": "code-1",
+         "event_type": "chat.final", "content": "code answer"},
+    ]
+    monkeypatch.setattr(session_metadata, "get_session_metadata", lambda _: {})
+    monkeypatch.setattr(session_ops_service, "history_exists", lambda _: True)
+    monkeypatch.setattr(session_ops_service, "load_history_records", lambda _: records)
+    monkeypatch.setattr(session_ops_service, "resolve_live_agent_session", lambda *_: session)
+
+    assert await session_ops_service.warmup_session_context(
+        deep_agent=agent, session_id="mixed-profile", handoff_profile="code",
+    )
+    contents = [message.content for message in engine.get_context(session_id="mixed-profile").get_messages()]
+    assert "CODE_FACT" in contents
+    assert "code answer" in contents
+    assert "WORK_SECRET" not in contents
+    assert "work answer" not in contents
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("refresh_existing", [False, True])
 async def test_cron_followup_refreshes_cached_context_and_keeps_completed_tail(monkeypatch, refresh_existing):
     from jiuwenswarm.agents.harness.common import session_ops_service

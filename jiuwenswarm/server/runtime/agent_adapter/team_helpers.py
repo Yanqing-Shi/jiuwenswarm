@@ -3392,6 +3392,9 @@ async def _start_team_stream_round(
         stream_task = asyncio.create_task(stream)
     finally:
         _TEAM_STREAM_REQUEST.reset(request_token)
+    from jiuwenswarm.runtime.context_handoff import retain_team_handoff
+
+    retain_team_handoff(stream_task)
     _register_team_stream_task(
         team_manager,
         session_id,
@@ -3444,29 +3447,37 @@ async def _process_team_message_stream_with_design(
     """
     design_bindings = await _bind_design_round_if_needed(request)
     try:
-        async with aclosing(_process_team_message_stream_locked(
-            request, inputs, deep_agent
-        )) as stream:
-            async for chunk in stream:
-                if design_bindings is not None:
-                    _push_design_tool_activity(request, chunk)
-                if isinstance(chunk.payload, dict) and chunk.payload.get("event_type") == "chat.processing_status":
-                    is_terminal_status = (
-                        chunk.payload.get("is_processing") is False
-                        and chunk.payload.get("is_complete") is True
-                    )
-                    logger.log(
-                        logging.INFO if is_terminal_status else logging.DEBUG,
-                        "[TeamProcessingStatus] handoff_to_adapter: session_id=%s request_id=%s "
-                        "channel_id=%s round_id=%s is_processing=%s is_complete=%s",
-                        request.session_id,
-                        chunk.request_id,
-                        chunk.channel_id,
-                        chunk.payload.get("rid"),
-                        chunk.payload.get("is_processing"),
-                        chunk.payload.get("is_complete"),
-                    )
-                yield chunk
+        from jiuwenswarm.runtime.context_handoff import bind_team_handoff, team_conversation_request
+
+        async with team_conversation_request(request) as attempt:
+            async with aclosing(_process_team_message_stream_locked(
+                request, inputs, deep_agent
+            )) as stream:
+                while True:
+                    with bind_team_handoff(attempt):
+                        try:
+                            chunk = await anext(stream)
+                        except StopAsyncIteration:
+                            break
+                    if design_bindings is not None:
+                        _push_design_tool_activity(request, chunk)
+                    if isinstance(chunk.payload, dict) and chunk.payload.get("event_type") == "chat.processing_status":
+                        is_terminal_status = (
+                            chunk.payload.get("is_processing") is False
+                            and chunk.payload.get("is_complete") is True
+                        )
+                        logger.log(
+                            logging.INFO if is_terminal_status else logging.DEBUG,
+                            "[TeamProcessingStatus] handoff_to_adapter: session_id=%s request_id=%s "
+                            "channel_id=%s round_id=%s is_processing=%s is_complete=%s",
+                            request.session_id,
+                            chunk.request_id,
+                            chunk.channel_id,
+                            chunk.payload.get("rid"),
+                            chunk.payload.get("is_processing"),
+                            chunk.payload.get("is_complete"),
+                        )
+                    yield chunk
     finally:
         if design_bindings is not None:
             design_bindings.cleanup()
@@ -3662,6 +3673,9 @@ async def _process_team_message_stream(
     )
     has_execution_context = isinstance(execution_context, TeamExecutionContext)
     run_context = _team_input_run_context(request) if has_execution_context else None
+    from jiuwenswarm.runtime.context_handoff import team_handoff_run_context
+
+    run_context = team_handoff_run_context(run_context)
 
     # Attach-only subscription: entering a running Team Session observes the
     # live stream without submitting input. It must short-circuit before the
@@ -5893,11 +5907,15 @@ async def _consume_stream_with_query(
             exc,
             exc_info=True,
         )
+        from jiuwenswarm.runtime.context_handoff import ContextHandoffError
+
+        error_payload = exc.payload() if isinstance(exc, ContextHandoffError) else {
+            "event_type": "chat.error", "error": str(exc),
+        }
         try:
             await _deliver(
                 {
-                    "event_type": "chat.error",
-                    "error": str(exc),
+                    **error_payload,
                     "session_id": session_id,
                 },
             )

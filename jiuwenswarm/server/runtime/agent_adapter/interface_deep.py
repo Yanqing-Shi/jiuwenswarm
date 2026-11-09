@@ -4609,6 +4609,7 @@ class JiuWenSwarmDeepAdapter:
                         deep_agent=getattr(adapter, "_instance", None),
                         session_id=sid,
                         history_before_request_id=history_before_request_id,
+                        handoff_profile="code" if getattr(self, "_is_code_agent", False) else "work",
                         **(
                             {"history_snapshot": history_snapshot}
                             if history_snapshot is not None
@@ -18564,6 +18565,28 @@ class JiuWenSwarmDeepAdapter:
         self, request: AgentRequest, inputs: dict[str, Any]
     ) -> AgentResponse:
         """Bind trusted host identity and command execution for one request."""
+        from jiuwenswarm.runtime.context_handoff import ContextHandoffError
+
+        try:
+            async with self._conversation_request_admission(request):
+                return await self._process_message_with_host_context(request, inputs)
+        except ContextHandoffError as exc:
+            return AgentResponse(request_id=request.request_id, channel_id=request.channel_id,
+                                 ok=False, payload=exc.payload(), metadata=request.metadata)
+
+    @asynccontextmanager
+    async def _conversation_request_admission(self, request: AgentRequest):
+        if not getattr(self, "_is_session_scoped_adapter", False) or getattr(self, "_external_harness_binding", None):
+            yield
+            return
+        from jiuwenswarm.runtime.context_handoff import agent_conversation_request
+
+        async with agent_conversation_request(request, self._instance):
+            yield
+
+    async def _process_message_with_host_context(
+        self, request: AgentRequest, inputs: dict[str, Any]
+    ) -> AgentResponse:
         async with self._permission_request_admission(request, inputs):
             self.validate_auto_permission_workspace_request(request)
             from jiuwenswarm.server.runtime.video_task.execution import bind_task_execution
@@ -19354,6 +19377,20 @@ class JiuWenSwarmDeepAdapter:
         self, request: AgentRequest, inputs: dict[str, Any]
     ) -> AsyncIterator[AgentResponseChunk]:
         """Bind trusted host identity and command execution for one stream."""
+        from jiuwenswarm.runtime.context_handoff import ContextHandoffError
+
+        try:
+            async with self._conversation_request_admission(request):
+                async with aclosing(self._process_stream_with_host_context(request, inputs)) as stream:
+                    async for chunk in stream:
+                        yield chunk
+        except ContextHandoffError as exc:
+            yield AgentResponseChunk(request_id=request.request_id, channel_id=request.channel_id,
+                                     payload=exc.payload(), is_complete=True)
+
+    async def _process_stream_with_host_context(
+        self, request: AgentRequest, inputs: dict[str, Any]
+    ) -> AsyncIterator[AgentResponseChunk]:
         async with self._permission_request_admission(request, inputs):
             self.validate_auto_permission_workspace_request(request)
             from jiuwenswarm.server.runtime.video_task.execution import bind_task_execution

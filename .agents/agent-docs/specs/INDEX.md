@@ -20,8 +20,9 @@ generated: true
 | [jiuwenswarm/channels/web/frontend](#module-3) |
 | [jiuwenswarm/extensions/sdk](#module-4) |
 | [jiuwenswarm/resources/plugins/ttse](#module-5) |
-| [jiuwenswarm/server/runtime/agent_adapter](#module-6) |
-| [未分类](#module-7) |
+| [jiuwenswarm/runtime](#module-6) |
+| [jiuwenswarm/server/runtime/agent_adapter](#module-7) |
+| [未分类](#module-8) |
 
 <a id="module-1"></a>
 
@@ -65,15 +66,24 @@ generated: true
 
 <a id="module-6"></a>
 
+## jiuwenswarm/runtime
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [S_01_agent-leader-context-handoff](runtime/S_01_agent-leader-context-handoff.md) | S | 同一 Session 的 Agent / Leader 对话归属 | 待确认 | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter | — | — |
+
+<a id="module-7"></a>
+
 ## jiuwenswarm/server/runtime/agent_adapter
 
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
+| [S_01_agent-leader-context-handoff](runtime/S_01_agent-leader-context-handoff.md) | S | 同一 Session 的 Agent / Leader 对话归属 | 待确认 | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter | — | — |
 | [S_01_app-agent-interaction](mcpApps/S_01_app-agent-interaction.md) | S | MCP App 到 Agent 交互规约 | LI Jinyang | jiuwenswarm/channels/web/frontend, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/channels/web/frontend/src/features/mcpApps/mcpAppContext.ts, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/McpAppView.tsx, jiuwenswarm/channels/web/frontend/src/hooks/useWebSocket.ts, jiuwenswarm/server/runtime/agent_adapter/user_turn.py | — |
 | [S_01_tool-discovery-language](jiuwenswarm/agents/harness/common/tools/S_01_tool-discovery-language.md) | S | 渐进式工具发现语言与原始执行契约 | MengHan18 | jiuwenswarm/agents/harness/common/tools, jiuwenswarm/agents/harness/common/rails, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/agents/harness/common/tools/tool_discovery_catalog.py, jiuwenswarm/agents/harness/common/tools/tool_retrieval_toolkits.py, jiuwenswarm/agents/harness/common/rails/tool_retrieval_prompt_rail.py, jiuwenswarm/agents/harness/code/rails/heartbeat_rail.py, jiuwenswarm/agents/harness/team/rails/team_member_skill_toolkit_rail.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py | — |
 | [S_03_native-plugin-runtime](jiuwenswarm/server/runtime/agent_adapter/S_03_native-plugin-runtime.md) | S | 原生插件通用运行服务与生命周期 | xinyang_bali | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/extensions/sdk | jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/extensions/sdk/plugin_runtime.py | — |
 
-<a id="module-7"></a>
+<a id="module-8"></a>
 
 ## 未分类
 

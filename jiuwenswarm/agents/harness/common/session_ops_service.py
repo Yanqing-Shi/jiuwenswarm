@@ -1517,21 +1517,16 @@ async def warmup_session_context(
     history_before_request_id: str | None = None,
     history_snapshot: SessionHistorySnapshot | None = None,
     refresh_existing: bool = False,
+    handoff_profile: str | None = None,
 ) -> bool:
-    """Restart-safe restore of context_engine messages from on-disk history.
+    """Restore a cold context from its native checkpoint or public history.
 
-    对话消息只存在于 context_engine 的进程内存（``_context_pool``），不落
-    checkpointer。server 重启或 session adapter 被空闲驱逐后重建时 pool 为
-    空，而 chat.send 主路径不会把磁盘 history.jsonl 回灌给模型，导致
-    "能看到历史列表但继续对话失忆"。
-
-    在新建 session adapter（``start_interaction`` 之后）调用：若内存 context
-    缺失且磁盘上有历史记录，则将 history 转换为 openjiuwen 消息并灌回
-    context_engine。chat.send 会先落盘当前用户消息再创建 adapter，因此传入
-    ``history_before_request_id`` 时只恢复该请求之前的记录，避免当前消息同时
-    作为历史和实时 query 注入。与 ``rewind_session_context`` 的区别：不改写
-    history、不清理 Session state（agent/workflow 状态已由 checkpointer 在
-    pre_run 恢复）、不强写 checkpointer（消息持久化本就由 history.jsonl 承担）。
+    Handoff-managed sessions prefer their restored native context, which keeps
+    Leader messages and offload data absent from the public history projection.
+    Other sessions rebuild from history after the interaction runtime starts.
+    ``history_before_request_id`` excludes the current query because chat.send
+    may already have recorded it. This warmup neither rewrites history nor
+    clears agent/workflow state restored by pre_run.
 
     ``refresh_existing`` replaces the cached Web context on its first follow-up
     to a cron run, retaining completed prior-round outputs after queued input.
@@ -1539,6 +1534,8 @@ async def warmup_session_context(
     ``history_snapshot`` is an optional request-local pre-read. Reuse requires
     the same owner, lifecycle generation, cutoff and unchanged history file;
     otherwise this function keeps its original on-disk read and filtering.
+    ``handoff_profile`` keeps a cold Agent's public-history fallback inside its
+    work or code conversation when both profiles use one product Session.
     """
     react_agent = getattr(deep_agent, "react_agent", None)
     if react_agent is None:
@@ -1550,6 +1547,20 @@ async def warmup_session_context(
     if existing_context is not None and not refresh_existing:
         # 内存上下文已存在（进程未重启 / 已 warmup / rewind 重建过）
         return True
+
+    # Handoff-managed Sessions keep the native representation in checkpoints.
+    # A cold adapter must not replace it with a filtered public history view.
+    if not refresh_existing:
+        from jiuwenswarm.server.runtime.session.session_metadata import get_session_metadata
+
+        metadata = get_session_metadata(session_id)
+        if metadata.get("conversation_handoff"):
+            session = resolve_live_agent_session(deep_agent, session_id)
+            if session is not None and session.get_state("context"):
+                await context_engine.create_context(
+                    session=session, processors=_get_context_processors(react_agent),
+                )
+                return True
 
     boundary_request_id = str(history_before_request_id or "").strip()
     if history_snapshot is not None and _history_snapshot_is_current(
@@ -1586,6 +1597,24 @@ async def warmup_session_context(
                         prior_records.append(item)
             history_records = prior_records
             break
+
+    if handoff_profile in {"work", "code"}:
+        from agent_gateway.common.mode_matrix import deprecate_mode
+
+        profile_modes = {
+            f"agent.{handoff_profile}.normal", f"agent.{handoff_profile}.plan",
+            f"team.{handoff_profile}.normal", f"team.{handoff_profile}.plan",
+        }
+        selected_ids = {
+            str(record.get("request_id") or "") for record in history_records
+            if record.get("role") == "user"
+            and deprecate_mode(record.get("mode") or "") in profile_modes
+        }
+        history_records = [
+            record for record in history_records
+            if deprecate_mode(record.get("mode") or "") in profile_modes
+            or (not record.get("mode") and str(record.get("request_id") or "") in selected_ids)
+        ]
 
     context_messages, skipped = _build_context_messages_from_history(history_records)
     if not context_messages:
