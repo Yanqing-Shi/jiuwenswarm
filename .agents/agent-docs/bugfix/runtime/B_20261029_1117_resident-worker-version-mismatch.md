@@ -49,3 +49,8 @@ Front 已启动，但重连的是 10 月 26 日留下的常驻 Worker（PID 1820
 
 启动日志：`/home/yanqingshi/cluster/runtime/agent/.logs/runtime-recovery-20261029.log`。
 配套实施记录：[F_20261029_0001_agent-leader-context-handoff.md](../../features/F_20261029_0001_agent-leader-context-handoff.md)。
+
+
+## 2026-11-13：对应实现已移除
+
+本记录涉及的复制式 handoff 未进入 develop，已按 D-20261112-0530-session-conversation-window 的用户决定移除，见 F_20261113_0307_shared-conversation-runtime 的同日记录。上文保留为当时的依据，不再描述当前行为。
