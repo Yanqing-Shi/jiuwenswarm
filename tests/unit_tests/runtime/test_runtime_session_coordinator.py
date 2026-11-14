@@ -124,6 +124,19 @@ async def test_admitted_session_message_stream_bypasses_user_waiting_in_lane() -
     user_entered = asyncio.Event()
     message_entered = asyncio.Event()
 
+    async def admit(session_id, work_kind):
+        if work_kind is not SessionWorkKind.CHAT_STREAM:
+            return None
+        user_entered.set()
+        await admission.begin_user(session_id)
+
+        async def release():
+            await admission.end_user(session_id)
+
+        return release
+
+    coordinator.set_operation_admission(admit)
+
     async def user():
         user_entered.set()
         await admission.begin_user("session-a")
@@ -1134,7 +1147,7 @@ async def test_new_work_supersedes_waiting_control() -> None:
 
 
 @pytest.mark.asyncio
-async def test_goal_stream_runs_while_chat_lane_is_busy() -> None:
+async def test_goal_stream_waits_for_active_chat_operation() -> None:
     coordinator = RuntimeSessionCoordinator()
     await _register(coordinator)
     chat_started = asyncio.Event()
@@ -1154,16 +1167,19 @@ async def test_goal_stream_runs_while_chat_lane_is_busy() -> None:
     async def goal():
         yield "goal.started"
 
-    assert [
-        item
-        async for item in coordinator.run_stream(
-            "session-a", "goal", SessionWorkKind.GOAL_STREAM, goal
-        )
-    ] == ["goal.started"]
-    assert not chat_task.done()
+    async def collect_goal():
+        return [
+            item async for item in coordinator.run_stream(
+                "session-a", "goal", SessionWorkKind.GOAL_STREAM, goal
+            )
+        ]
 
+    goal_task = asyncio.create_task(collect_goal())
+    await asyncio.sleep(0.02)
+    assert not goal_task.done()
     finish_chat.set()
     await chat_task
+    assert await asyncio.wait_for(goal_task, 1) == ["goal.started"]
     await coordinator.close()
 
 
@@ -1211,7 +1227,6 @@ async def test_control_input_matches_goal_interaction_id() -> None:
         yield "ask"
 
     for request_id, work_kind, control_id in (
-        ("chat", SessionWorkKind.CHAT_STREAM, "chat-question"),
         ("goal", SessionWorkKind.GOAL_STREAM, "goal-question"),
     ):
         assert [
@@ -1233,7 +1248,6 @@ async def test_control_input_matches_goal_interaction_id() -> None:
     snapshot = coordinator.snapshot_session("session-a")
     assert snapshot is not None
     goal = next(item for item in snapshot.executions if item.request_id == "goal")
-    chat = next(item for item in snapshot.executions if item.request_id == "chat")
     control = next(
         item
         for item in snapshot.executions
@@ -1241,7 +1255,6 @@ async def test_control_input_matches_goal_interaction_id() -> None:
     )
     assert control.parent_execution_id == goal.execution_id
     assert goal.state is SessionExecutionState.SUCCEEDED
-    assert chat.state is SessionExecutionState.WAITING_FOR_CONTROL
     await coordinator.close()
 
 

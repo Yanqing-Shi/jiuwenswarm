@@ -286,7 +286,11 @@ async def test_round_persistence_and_cleanup_at_output_boundaries(
         monkeypatch.setattr(h.adapter._instance.loop_session, "commit", commit)
         monkeypatch.setattr(h.adapter, "_attach_and_send_inputs", AsyncMock(return_value=(output, False)))
     params = {"query": "", "attach_only": True} if boundary == "observer" else answer
-    await _send_request(h, streaming=streaming, **params)
+    if boundary == "commit" and not streaming:
+        # A Session on a shared conversation never reports success when its final save fails.
+        assert not (await _request(h, **params)).ok
+    else:
+        await _send_request(h, streaming=streaming, **params)
     assert not +h.adapter._active_session_ids
     pending = await _persisted_interrupt(h, checkpointer)
     assert list(pending) == ([] if boundary == "close" else ["call_0"])

@@ -106,6 +106,14 @@ async def test_cold_fresh_text_replaces_real_sqlite_permission_batch(
         session = old.adapter._instance.loop_session
         state = wrap_batch(deepcopy(session.get_state(INTERRUPTION_KEY)), wrapper_goal)
         session.update_state({INTERRUPTION_KEY: state})
+        # The paused calls are the model's own message. A shared conversation
+        # keeps that message, so it must carry the same wrapped calls.
+        engine = old.adapter._instance.react_agent.context_engine
+        context = engine.get_context(session_id=session.get_session_id())
+        messages = list(context.get_messages())
+        messages[-1] = messages[-1].model_copy(update={"tool_calls": list(state.ai_message.tool_calls)})
+        context.set_messages(messages)
+        await engine.save_contexts(session)
         await session.commit()
     prefix = "outer_" if wrapper_goal else ""
     expected_ids = {f"{prefix}call_{i}" for i in range(count)}
