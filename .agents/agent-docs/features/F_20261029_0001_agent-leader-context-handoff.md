@@ -123,3 +123,8 @@ Swarm 基线为 `7853595c79b8e63dbfe319c1b8f0801b7b347854`，Core 基线为
 合并 Core 新增的 invocation/proposal 生命周期，并将 mode_matrix 引用改为独立 Gateway 包。
 Core spec 和 feature 按当前文档布局定位。以上测试数字属于原补丁的历史记录；本次仅恢复和合并，
 未重新运行行为测试，两个仓库当前均无 `.venv`。新基线的运行兼容性与可安装依赖仍待验证。
+
+
+## 2026-11-13：对应实现已移除
+
+本记录涉及的复制式 handoff 未进入 develop，已按 D-20261112-0530-session-conversation-window 的用户决定移除，见 F_20261113_0307_shared-conversation-runtime 的同日记录。上文保留为当时的依据，不再描述当前行为。

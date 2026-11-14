@@ -1,7 +1,7 @@
 ---
 title: D/F/B/S 文档总索引
-author: openjiuwen_ai
-author_email: openjiuwen_ai@163.com
+author: Yanqing-Shi
+author_email: toddsyq@gmail.com
 generated: true
 ---
 
@@ -17,38 +17,44 @@ generated: true
 |---|
 | [agent-core/openjiuwen/agent_teams/harness](#module-1) |
 | [agent-core/openjiuwen/core/context_engine](#module-2) |
-| [agent_gateway/channel_manager/im_platforms/xiaoyi](#module-3) |
-| [agent_gateway/message_handler](#module-4) |
-| [agent_teams](#module-5) |
-| [agent_teams/workflow](#module-6) |
-| [gateway/channel_manager/web](#module-7) |
-| [jiuwenswarm](#module-8) |
-| [jiuwenswarm/agents/harness](#module-9) |
-| [jiuwenswarm/agents/harness/code/rails/heartbeat](#module-10) |
-| [jiuwenswarm/agents/harness/common/rails](#module-11) |
-| [jiuwenswarm/agents/harness/common/tools](#module-12) |
-| [jiuwenswarm/agents/harness/common/tools/cron](#module-13) |
-| [jiuwenswarm/agents/swarm](#module-14) |
-| [jiuwenswarm/channels/tui](#module-15) |
-| [jiuwenswarm/channels/web](#module-16) |
-| [jiuwenswarm/channels/web/frontend](#module-17) |
-| [jiuwenswarm/extensions/sdk](#module-18) |
-| [jiuwenswarm/gateway/channel_manager/web](#module-19) |
-| [jiuwenswarm/observability](#module-20) |
-| [jiuwenswarm/resources/plugins/ttse](#module-21) |
-| [jiuwenswarm/runtime](#module-22) |
-| [jiuwenswarm/server](#module-23) |
-| [jiuwenswarm/server/runtime/agent_adapter](#module-24) |
-| [jiuwenswarm/server/runtime/skill](#module-25) |
-| [jiuwenswarm/server/supervisor](#module-26) |
-| [jiuwenswarm/server/worker](#module-27) |
-| [scripts](#module-28) |
-| [tests/fixtures/ttse_plugin](#module-29) |
-| [tests/unit_tests/agentserver](#module-30) |
-| [tests/unit_tests/gateway](#module-31) |
-| [tests/unit_tests/personal_context](#module-32) |
-| [tests/unit_tests/server/extensions](#module-33) |
-| [未分类](#module-34) |
+| [agent-core/openjiuwen/core/session](#module-3) |
+| [agent-core/openjiuwen/harness](#module-4) |
+| [agent_gateway/channel_manager/im_platforms/xiaoyi](#module-5) |
+| [agent_gateway/message_handler](#module-6) |
+| [agent_teams](#module-7) |
+| [agent_teams/workflow](#module-8) |
+| [gateway/channel_manager/web](#module-9) |
+| [jiuwenswarm](#module-10) |
+| [jiuwenswarm/agents/harness](#module-11) |
+| [jiuwenswarm/agents/harness/code/rails/heartbeat](#module-12) |
+| [jiuwenswarm/agents/harness/common](#module-13) |
+| [jiuwenswarm/agents/harness/common/rails](#module-14) |
+| [jiuwenswarm/agents/harness/common/tools](#module-15) |
+| [jiuwenswarm/agents/harness/common/tools/cron](#module-16) |
+| [jiuwenswarm/agents/harness/team](#module-17) |
+| [jiuwenswarm/agents/swarm](#module-18) |
+| [jiuwenswarm/channels/tui](#module-19) |
+| [jiuwenswarm/channels/web](#module-20) |
+| [jiuwenswarm/channels/web/frontend](#module-21) |
+| [jiuwenswarm/extensions/sdk](#module-22) |
+| [jiuwenswarm/gateway/channel_manager/web](#module-23) |
+| [jiuwenswarm/observability](#module-24) |
+| [jiuwenswarm/resources/plugins/ttse](#module-25) |
+| [jiuwenswarm/runtime](#module-26) |
+| [jiuwenswarm/runtime/session](#module-27) |
+| [jiuwenswarm/server](#module-28) |
+| [jiuwenswarm/server/runtime/agent_adapter](#module-29) |
+| [jiuwenswarm/server/runtime/session](#module-30) |
+| [jiuwenswarm/server/runtime/skill](#module-31) |
+| [jiuwenswarm/server/supervisor](#module-32) |
+| [jiuwenswarm/server/worker](#module-33) |
+| [scripts](#module-34) |
+| [tests/fixtures/ttse_plugin](#module-35) |
+| [tests/unit_tests/agentserver](#module-36) |
+| [tests/unit_tests/gateway](#module-37) |
+| [tests/unit_tests/personal_context](#module-38) |
+| [tests/unit_tests/server/extensions](#module-39) |
+| [未分类](#module-40) |
 
 <a id="module-1"></a>
 
@@ -57,6 +63,7 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
 | [D-20261028-1704-agent-leader-context-handoff](designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) | D | 单智能体与团队 Leader 的最小上下文交接 | 待确认 | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/runtime, agent-core/openjiuwen/agent_teams/harness, agent-core/openjiuwen/core/context_engine | — | — |
+| [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) | D | Session 共享主对话窗口 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/server/runtime/session, jiuwenswarm/agents/harness/common, agent-core/openjiuwen/core/context_engine, agent-core/openjiuwen/core/session, agent-core/openjiuwen/harness, agent-core/openjiuwen/agent_teams/harness | — | — |
 
 <a id="module-2"></a>
 
@@ -65,8 +72,25 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
 | [D-20261028-1704-agent-leader-context-handoff](designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) | D | 单智能体与团队 Leader 的最小上下文交接 | 待确认 | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/runtime, agent-core/openjiuwen/agent_teams/harness, agent-core/openjiuwen/core/context_engine | — | — |
+| [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) | D | Session 共享主对话窗口 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/server/runtime/session, jiuwenswarm/agents/harness/common, agent-core/openjiuwen/core/context_engine, agent-core/openjiuwen/core/session, agent-core/openjiuwen/harness, agent-core/openjiuwen/agent_teams/harness | — | — |
 
 <a id="module-3"></a>
+
+## agent-core/openjiuwen/core/session
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) | D | Session 共享主对话窗口 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/server/runtime/session, jiuwenswarm/agents/harness/common, agent-core/openjiuwen/core/context_engine, agent-core/openjiuwen/core/session, agent-core/openjiuwen/harness, agent-core/openjiuwen/agent_teams/harness | — | — |
+
+<a id="module-4"></a>
+
+## agent-core/openjiuwen/harness
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) | D | Session 共享主对话窗口 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/server/runtime/session, jiuwenswarm/agents/harness/common, agent-core/openjiuwen/core/context_engine, agent-core/openjiuwen/core/session, agent-core/openjiuwen/harness, agent-core/openjiuwen/agent_teams/harness | — | — |
+
+<a id="module-5"></a>
 
 ## agent_gateway/channel_manager/im_platforms/xiaoyi
 
@@ -74,7 +98,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261028_1445_xiaoyi-team-join-delivery](bugfix/gateway/channel_manager/im_platforms/xiaoyi/B_20261028_1445_xiaoyi-team-join-delivery.md) | B | 小艺成员加入团队后仅在通知栏收到 Team Leader 消息 | zhongxiaotian | agent_gateway/channel_manager/im_platforms/xiaoyi, agent_gateway/message_handler | agent_gateway/channel_manager/im_platforms/xiaoyi/xiaoyi_connect.py, agent_gateway/message_handler/join_exit_handlers.py, tests/unit_tests/gateway/test_xiaoyi_team_delivery.py | 无独立 D：当前团队席位和 fan-out 契约未变化，本次仅修复小艺平台任务生命周期。 |
 
-<a id="module-4"></a>
+<a id="module-6"></a>
 
 ## agent_gateway/message_handler
 
@@ -82,7 +106,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261028_1445_xiaoyi-team-join-delivery](bugfix/gateway/channel_manager/im_platforms/xiaoyi/B_20261028_1445_xiaoyi-team-join-delivery.md) | B | 小艺成员加入团队后仅在通知栏收到 Team Leader 消息 | zhongxiaotian | agent_gateway/channel_manager/im_platforms/xiaoyi, agent_gateway/message_handler | agent_gateway/channel_manager/im_platforms/xiaoyi/xiaoyi_connect.py, agent_gateway/message_handler/join_exit_handlers.py, tests/unit_tests/gateway/test_xiaoyi_team_delivery.py | 无独立 D：当前团队席位和 fan-out 契约未变化，本次仅修复小艺平台任务生命周期。 |
 
-<a id="module-5"></a>
+<a id="module-7"></a>
 
 ## agent_teams
 
@@ -90,7 +114,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [SDD-0029](designs/proposals/SDD-0029-team-session-runtime-integration/design.md) | D | Team 模式接入统一 Session Runtime | @zhanglongmin | agent_teams | — | — |
 
-<a id="module-6"></a>
+<a id="module-8"></a>
 
 ## agent_teams/workflow
 
@@ -100,7 +124,7 @@ generated: true
 | [SDD-0010](designs/archive/SDD-0010-jiuwen-tui-nested-workflow-and-budget-observability/design.md) | D | jiuwen TUI 嵌套 Workflow 与 Budget 可观测性 | @chenchunzhou | agent_teams/workflow, jiuwenswarm | — | — |
 | [SDD-0028](designs/archive/SDD-0028-swarmflow-verify-fork-observability/design.md) | D | swarmflow verify / fork 可观测与前端呈现 | @xiajing | agent_teams/workflow, jiuwenswarm | — | — |
 
-<a id="module-7"></a>
+<a id="module-9"></a>
 
 ## gateway/channel_manager/web
 
@@ -109,7 +133,7 @@ generated: true
 | [F_20261031_1139_gateway-session-e2a](features/F_20261031_1139_gateway-session-e2a.md) | F | Web 会话管理统一经 E2A 交由 Server 执行 | ruiqiang2 | gateway/channel_manager/web | gateway/channel_manager/web/app_web_handlers.py, tests/unit_tests/gateway/test_app_web_handlers.py | 无独立 D：用户确认的 Gateway 解耦任务 4.1，沿用 develop 个人版现有链路，无独立设计编号。 |
 | [B_20261102_1644_cron-web-default-project-id](bugfix/gateway/channel_manager/B_20261102_1644_cron-web-default-project-id.md) | B | 前端未选项目创建定时任务落库 project_id 回退为空串 | kdgmpw | gateway/channel_manager/web | gateway/channel_manager/web/app_web_handlers.py, jiuwenswarm/channels/web/frontend/src/components/CronPanel/cronProjectDisplay.ts, tests/unit_tests/gateway/test_app_web_handlers.py | 无独立 D：恢复 4b00671f6（#5713）已实现的行为，属于对该修复在企业版合入后被回退的局部回归修复，无独立设计。 |
 
-<a id="module-8"></a>
+<a id="module-10"></a>
 
 ## jiuwenswarm
 
@@ -123,7 +147,7 @@ generated: true
 | [B_20261031_0946_ttse-codecheck-boundaries](bugfix/jiuwenswarm/B_20261031_0946_ttse-codecheck-boundaries.md) | B | TTSE 相关 CodeCheck 受保护访问与关闭条件复杂度修复 | xinyang_bali | jiuwenswarm, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/openjiuwen_fs_rwlock_patch.py, jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, tests/unit_tests/test_openjiuwen_fs_rwlock_patch.py, tests/unit_tests/agentserver/test_ttse_plugin_runtime.py, scripts/package_ttse_plugin.py, tests/unit_tests/server/extensions/test_ttse_plugin_package.py | 无独立 D：按用户提供的 20 项 CodeCheck 清单修复实现边界，沿用当前 TTSE 通用运行契约，无独立 D。 |
 | [B_20261031_1053_atomgit-review](bugfix/jiuwenswarm/server/B_20261031_1053_atomgit-review.md) | B | PR 9317 AtomGit 取消、补丁兼容与注销恢复修复 | xinyang_bali | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm | jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/openjiuwen_fs_rwlock_patch.py, tests/unit_tests/agentserver/test_ttse_plugin_runtime.py, tests/unit_tests/agentserver/test_ttse_background_drain.py, tests/unit_tests/test_openjiuwen_fs_rwlock_patch.py | 无独立 D：根据机器人检视修复现有资源生命周期和可选补丁边界，不引入独立方案。 |
 
-<a id="module-9"></a>
+<a id="module-11"></a>
 
 ## jiuwenswarm/agents/harness
 
@@ -131,7 +155,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [F_20261027_1843_ttse-plugin-rail](features/F_20261027_1843_ttse-plugin-rail.md) | F | TTSE 以插件 Rail 接入主 Coding Agent | xinyang_bali | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/agents/harness, jiuwenswarm/extensions/sdk, jiuwenswarm/resources/plugins/ttse | jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py, jiuwenswarm/extensions/sdk/plugin_runtime.py, jiuwenswarm/agents/harness/agent_observability.py, jiuwenswarm/resources/plugins/ttse/manifest.json, scripts/package_ttse_plugin.py | 无独立 D：用户确认执行 D:/files/自演进/方案/ttse适配code agent 中的外部适配方案，该资料没有仓内 D 标识。 |
 
-<a id="module-10"></a>
+<a id="module-12"></a>
 
 ## jiuwenswarm/agents/harness/code/rails/heartbeat
 
@@ -139,7 +163,16 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261027_1553_reminder-tool-routing](bugfix/jiuwenswarm/agents/harness/common/tools/cron/B_20261027_1553_reminder-tool-routing.md) | B | Code 模式中文提醒错误路由到 heartbeat | MengHan18 | jiuwenswarm/agents/harness/common/tools/cron, jiuwenswarm/agents/harness/code/rails/heartbeat | jiuwenswarm/agents/harness/common/tools/tool_discovery_catalog.py, tests/unit_tests/agentserver/test_tool_discovery_language.py | 无独立 D：针对 Issue 5615 的局部工具选路缺陷修复，无独立设计。 |
 
-<a id="module-11"></a>
+<a id="module-13"></a>
+
+## jiuwenswarm/agents/harness/common
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) | D | Session 共享主对话窗口 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/server/runtime/session, jiuwenswarm/agents/harness/common, agent-core/openjiuwen/core/context_engine, agent-core/openjiuwen/core/session, agent-core/openjiuwen/harness, agent-core/openjiuwen/agent_teams/harness | — | — |
+| [F_20261113_0307_shared-conversation-runtime](features/F_20261113_0307_shared-conversation-runtime.md) | F | I-04 共享主窗口的 Runtime 与 adapter 装配 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/agents/harness/common | jiuwenswarm/runtime/session/conversation.py, jiuwenswarm/runtime/service.py, jiuwenswarm/runtime/session_provisioner.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/team_helpers.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/agents/harness/common/session_ops_service.py | [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) |
+
+<a id="module-14"></a>
 
 ## jiuwenswarm/agents/harness/common/rails
 
@@ -148,7 +181,7 @@ generated: true
 | [F_20261027_2015_bilingual-progressive-tool-discovery](features/jiuwenswarm/agents/harness/common/tools/F_20261027_2015_bilingual-progressive-tool-discovery.md) | F | 中英文渐进式工具发现 | MengHan18 | jiuwenswarm/agents/harness/common/tools, jiuwenswarm/agents/harness/common/rails, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/agents/harness/common/tools/tool_discovery_catalog.py, jiuwenswarm/agents/harness/common/tools/tool_retrieval_toolkits.py, jiuwenswarm/agents/harness/common/rails/tool_retrieval_prompt_rail.py, jiuwenswarm/agents/harness/code/rails/heartbeat_rail.py, jiuwenswarm/agents/harness/team/rails/team_member_skill_toolkit_rail.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py, tests/unit_tests/agentserver/test_tool_discovery_language.py | 无独立 D：针对 Issue 5615 后续扩展的已确认实现，未建立独立仓内设计编号 |
 | [S_01_tool-discovery-language](specs/jiuwenswarm/agents/harness/common/tools/S_01_tool-discovery-language.md) | S | 渐进式工具发现语言与原始执行契约 | MengHan18 | jiuwenswarm/agents/harness/common/tools, jiuwenswarm/agents/harness/common/rails, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/agents/harness/common/tools/tool_discovery_catalog.py, jiuwenswarm/agents/harness/common/tools/tool_retrieval_toolkits.py, jiuwenswarm/agents/harness/common/rails/tool_retrieval_prompt_rail.py, jiuwenswarm/agents/harness/code/rails/heartbeat_rail.py, jiuwenswarm/agents/harness/team/rails/team_member_skill_toolkit_rail.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py | — |
 
-<a id="module-12"></a>
+<a id="module-15"></a>
 
 ## jiuwenswarm/agents/harness/common/tools
 
@@ -157,7 +190,7 @@ generated: true
 | [F_20261027_2015_bilingual-progressive-tool-discovery](features/jiuwenswarm/agents/harness/common/tools/F_20261027_2015_bilingual-progressive-tool-discovery.md) | F | 中英文渐进式工具发现 | MengHan18 | jiuwenswarm/agents/harness/common/tools, jiuwenswarm/agents/harness/common/rails, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/agents/harness/common/tools/tool_discovery_catalog.py, jiuwenswarm/agents/harness/common/tools/tool_retrieval_toolkits.py, jiuwenswarm/agents/harness/common/rails/tool_retrieval_prompt_rail.py, jiuwenswarm/agents/harness/code/rails/heartbeat_rail.py, jiuwenswarm/agents/harness/team/rails/team_member_skill_toolkit_rail.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py, tests/unit_tests/agentserver/test_tool_discovery_language.py | 无独立 D：针对 Issue 5615 后续扩展的已确认实现，未建立独立仓内设计编号 |
 | [S_01_tool-discovery-language](specs/jiuwenswarm/agents/harness/common/tools/S_01_tool-discovery-language.md) | S | 渐进式工具发现语言与原始执行契约 | MengHan18 | jiuwenswarm/agents/harness/common/tools, jiuwenswarm/agents/harness/common/rails, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/agents/harness/common/tools/tool_discovery_catalog.py, jiuwenswarm/agents/harness/common/tools/tool_retrieval_toolkits.py, jiuwenswarm/agents/harness/common/rails/tool_retrieval_prompt_rail.py, jiuwenswarm/agents/harness/code/rails/heartbeat_rail.py, jiuwenswarm/agents/harness/team/rails/team_member_skill_toolkit_rail.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py | — |
 
-<a id="module-13"></a>
+<a id="module-16"></a>
 
 ## jiuwenswarm/agents/harness/common/tools/cron
 
@@ -165,7 +198,16 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261027_1553_reminder-tool-routing](bugfix/jiuwenswarm/agents/harness/common/tools/cron/B_20261027_1553_reminder-tool-routing.md) | B | Code 模式中文提醒错误路由到 heartbeat | MengHan18 | jiuwenswarm/agents/harness/common/tools/cron, jiuwenswarm/agents/harness/code/rails/heartbeat | jiuwenswarm/agents/harness/common/tools/tool_discovery_catalog.py, tests/unit_tests/agentserver/test_tool_discovery_language.py | 无独立 D：针对 Issue 5615 的局部工具选路缺陷修复，无独立设计。 |
 
-<a id="module-14"></a>
+<a id="module-17"></a>
+
+## jiuwenswarm/agents/harness/team
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [F_20261112_0650_session-operation-ownership](features/F_20261112_0650_session-operation-ownership.md) | F | I-00 Session 操作锁与生命周期基础 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/session, jiuwenswarm/agents/harness/team | jiuwenswarm/runtime/session/operation_lock.py, jiuwenswarm/runtime/session/native_operation.py, jiuwenswarm/runtime/session/coordinator.py, jiuwenswarm/runtime/service.py, jiuwenswarm/runtime/context_handoff.py, jiuwenswarm/agents/harness/team/team_manager.py, jiuwenswarm/server/runtime/session/project_store.py, jiuwenswarm/server/runtime/session/session_archive.py, jiuwenswarm/server/runtime/session/lifecycle.py, tests/unit_tests/runtime/test_session_operation_lock.py, tests/unit_tests/runtime/test_runtime_session_coordinator.py, tests/unit_tests/runtime/test_runtime_service.py, tests/unit_tests/runtime/test_interaction_answer_delivery.py, tests/unit_tests/server/test_archive_lifecycle.py, tests/unit_tests/agentserver/test_heartbeat_session_runtime.py, docs/zh/项目与会话管理.md, docs/en/Project-Session-Management.md | [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) |
+| [S_02_session-operation-ownership](specs/runtime/S_02_session-operation-ownership.md) | S | Session 运行与模式切换的操作互斥 | Yanqing-Shi | jiuwenswarm/runtime/session, jiuwenswarm/agents/harness/team | jiuwenswarm/runtime/session/operation_lock.py, jiuwenswarm/runtime/session/native_operation.py, jiuwenswarm/runtime/session/coordinator.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/runtime/session/project_store.py | — |
+
+<a id="module-18"></a>
 
 ## jiuwenswarm/agents/swarm
 
@@ -173,7 +215,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261106_1132_organization-round-cleanup](bugfix/jiuwenswarm/agents/swarm/B_20261106_1132_organization-round-cleanup.md) | B | 组织回合澄清等待、失败尝试与初次建卡取消的收尾修复 | “ZhangRan-Zora | jiuwenswarm/agents/swarm, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/agents/swarm/group_execution.py, jiuwenswarm/agents/swarm/group_org_bootstrap.py, jiuwenswarm/server/runtime/agent_adapter/team_helpers.py, tests/agents/swarm/test_group_org_bootstrap.py | 无独立 D：按 PR 9636 三条检视意见修复既有组织生命周期边界，无独立设计。 |
 
-<a id="module-15"></a>
+<a id="module-19"></a>
 
 ## jiuwenswarm/channels/tui
 
@@ -181,7 +223,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261103_1451_hub-default-url-consistency](bugfix/jiuwenswarm/channels/web/B_20261103_1451_hub-default-url-consistency.md) | B | Swarm Skills Hub 默认地址前后端/文档不一致导致回退域名不可达 | openjiuwen_ai | jiuwenswarm/channels/web, jiuwenswarm/channels/tui | jiuwenswarm/channels/web/frontend/src/features/TeamSkillsHubModal/index.tsx, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/teamskills.ts, jiuwenswarm/channels/web/frontend/tests/skillHubEndpointContract.test.mjs, docs/en/SwarmSkills.md, docs/zh/SwarmSkills.md, docs/en/Configuration.md, docs/zh/配置信息.md | 无独立 D：纯默认值与文档文案对齐修复，无独立设计；后端默认值（hub_client.DEFAULT_HUB_BASE_URL）与 README 已是正确口径。 |
 
-<a id="module-16"></a>
+<a id="module-20"></a>
 
 ## jiuwenswarm/channels/web
 
@@ -192,7 +234,7 @@ generated: true
 | [B_20261103_1112_raw-file-range-seek](bugfix/jiuwenswarm/channels/web/B_20261103_1112_raw-file-range-seek.md) | B | /file-api/raw-file 不支持 Range 请求导致 design 模式视频预览进度条不可快进 | openjiuwen_ai | jiuwenswarm/channels/web, jiuwenswarm/channels/web/frontend | jiuwenswarm/channels/web/app_web.py, jiuwenswarm/channels/web/frontend/vite.config.ts, tests/unit_tests/test_app_web_raw_file.py | 无独立 D：根因与修法均为标准 HTTP 单区间 Range 语义（对齐 gateway 既有 serve_file_chunks 实现），无独立设计。 |
 | [B_20261103_1451_hub-default-url-consistency](bugfix/jiuwenswarm/channels/web/B_20261103_1451_hub-default-url-consistency.md) | B | Swarm Skills Hub 默认地址前后端/文档不一致导致回退域名不可达 | openjiuwen_ai | jiuwenswarm/channels/web, jiuwenswarm/channels/tui | jiuwenswarm/channels/web/frontend/src/features/TeamSkillsHubModal/index.tsx, jiuwenswarm/channels/tui/frontend/src/core/commands/builtins/teamskills.ts, jiuwenswarm/channels/web/frontend/tests/skillHubEndpointContract.test.mjs, docs/en/SwarmSkills.md, docs/zh/SwarmSkills.md, docs/en/Configuration.md, docs/zh/配置信息.md | 无独立 D：纯默认值与文档文案对齐修复，无独立设计；后端默认值（hub_client.DEFAULT_HUB_BASE_URL）与 README 已是正确口径。 |
 
-<a id="module-17"></a>
+<a id="module-21"></a>
 
 ## jiuwenswarm/channels/web/frontend
 
@@ -205,7 +247,7 @@ generated: true
 | [B_20261107_1505_6226-forwarding-replay](bugfix/jiuwenswarm/server/supervisor/B_20261107_1505_6226-forwarding-replay.md) | B | 历史回放触发转发队列溢出及前端计时不收尾 | kdgmpw | jiuwenswarm/server/supervisor, jiuwenswarm/channels/web/frontend | jiuwenswarm/server/supervisor/runtime_supervisor.py, jiuwenswarm/channels/web/frontend/src/hooks/useWebSocket.ts, tests/unit_tests/agentserver/test_supervisor_forwarding.py, jiuwenswarm/channels/web/frontend/tests/sessionInput.test.mjs | 无独立 D：对现有有界转发及前端终态处理的小范围修复，无独立设计。 |
 | [S_01_app-agent-interaction](specs/mcpApps/S_01_app-agent-interaction.md) | S | MCP App 到 Agent 交互规约 | LI Jinyang | jiuwenswarm/channels/web/frontend, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/channels/web/frontend/src/features/mcpApps/mcpAppContext.ts, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/McpAppView.tsx, jiuwenswarm/channels/web/frontend/src/hooks/useWebSocket.ts, jiuwenswarm/server/runtime/agent_adapter/user_turn.py | — |
 
-<a id="module-18"></a>
+<a id="module-22"></a>
 
 ## jiuwenswarm/extensions/sdk
 
@@ -214,7 +256,7 @@ generated: true
 | [F_20261027_1843_ttse-plugin-rail](features/F_20261027_1843_ttse-plugin-rail.md) | F | TTSE 以插件 Rail 接入主 Coding Agent | xinyang_bali | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/agents/harness, jiuwenswarm/extensions/sdk, jiuwenswarm/resources/plugins/ttse | jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py, jiuwenswarm/extensions/sdk/plugin_runtime.py, jiuwenswarm/agents/harness/agent_observability.py, jiuwenswarm/resources/plugins/ttse/manifest.json, scripts/package_ttse_plugin.py | 无独立 D：用户确认执行 D:/files/自演进/方案/ttse适配code agent 中的外部适配方案，该资料没有仓内 D 标识。 |
 | [S_03_native-plugin-runtime](specs/jiuwenswarm/server/runtime/agent_adapter/S_03_native-plugin-runtime.md) | S | 原生插件通用运行服务与生命周期 | xinyang_bali | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/extensions/sdk | jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/extensions/sdk/plugin_runtime.py | — |
 
-<a id="module-19"></a>
+<a id="module-23"></a>
 
 ## jiuwenswarm/gateway/channel_manager/web
 
@@ -222,7 +264,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [SDD-0025](designs/proposals/SDD-0025-trajectory-session-store-and-serving/design.md) | D | 轨迹数据面：会话级 SQLite 存储、实时变更提示与读取 API | @alan_cheng | jiuwenswarm/observability, jiuwenswarm/gateway/channel_manager/web | — | — |
 
-<a id="module-20"></a>
+<a id="module-24"></a>
 
 ## jiuwenswarm/observability
 
@@ -230,7 +272,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [SDD-0025](designs/proposals/SDD-0025-trajectory-session-store-and-serving/design.md) | D | 轨迹数据面：会话级 SQLite 存储、实时变更提示与读取 API | @alan_cheng | jiuwenswarm/observability, jiuwenswarm/gateway/channel_manager/web | — | — |
 
-<a id="module-21"></a>
+<a id="module-25"></a>
 
 ## jiuwenswarm/resources/plugins/ttse
 
@@ -239,19 +281,30 @@ generated: true
 | [F_20261027_1843_ttse-plugin-rail](features/F_20261027_1843_ttse-plugin-rail.md) | F | TTSE 以插件 Rail 接入主 Coding Agent | xinyang_bali | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/agents/harness, jiuwenswarm/extensions/sdk, jiuwenswarm/resources/plugins/ttse | jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py, jiuwenswarm/extensions/sdk/plugin_runtime.py, jiuwenswarm/agents/harness/agent_observability.py, jiuwenswarm/resources/plugins/ttse/manifest.json, scripts/package_ttse_plugin.py | 无独立 D：用户确认执行 D:/files/自演进/方案/ttse适配code agent 中的外部适配方案，该资料没有仓内 D 标识。 |
 | [S_02_ttse-plugin-runtime](specs/jiuwenswarm/server/runtime/agent_adapter/S_02_ttse-plugin-runtime.md) | S | TTSE Coding 插件运行契约 | xinyang_bali | jiuwenswarm/resources/plugins/ttse | jiuwenswarm/resources/plugins/ttse/rails/ttse_plugin_rail.py, jiuwenswarm/resources/plugins/ttse/manifest.json | — |
 
-<a id="module-22"></a>
+<a id="module-26"></a>
 
 ## jiuwenswarm/runtime
 
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
 | [D-20261028-1704-agent-leader-context-handoff](designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) | D | 单智能体与团队 Leader 的最小上下文交接 | 待确认 | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/runtime, agent-core/openjiuwen/agent_teams/harness, agent-core/openjiuwen/core/context_engine | — | — |
+| [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) | D | Session 共享主对话窗口 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/server/runtime/session, jiuwenswarm/agents/harness/common, agent-core/openjiuwen/core/context_engine, agent-core/openjiuwen/core/session, agent-core/openjiuwen/harness, agent-core/openjiuwen/agent_teams/harness | — | — |
 | [F_20261029_0001_agent-leader-context-handoff](features/F_20261029_0001_agent-leader-context-handoff.md) | F | 单智能体与 Leader 上下文交接实施记录 | 待确认 | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter | — | [D-20261028-1704-agent-leader-context-handoff](designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) |
+| [F_20261112_0650_session-operation-ownership](features/F_20261112_0650_session-operation-ownership.md) | F | I-00 Session 操作锁与生命周期基础 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/session, jiuwenswarm/agents/harness/team | jiuwenswarm/runtime/session/operation_lock.py, jiuwenswarm/runtime/session/native_operation.py, jiuwenswarm/runtime/session/coordinator.py, jiuwenswarm/runtime/service.py, jiuwenswarm/runtime/context_handoff.py, jiuwenswarm/agents/harness/team/team_manager.py, jiuwenswarm/server/runtime/session/project_store.py, jiuwenswarm/server/runtime/session/session_archive.py, jiuwenswarm/server/runtime/session/lifecycle.py, tests/unit_tests/runtime/test_session_operation_lock.py, tests/unit_tests/runtime/test_runtime_session_coordinator.py, tests/unit_tests/runtime/test_runtime_service.py, tests/unit_tests/runtime/test_interaction_answer_delivery.py, tests/unit_tests/server/test_archive_lifecycle.py, tests/unit_tests/agentserver/test_heartbeat_session_runtime.py, docs/zh/项目与会话管理.md, docs/en/Project-Session-Management.md | [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) |
+| [F_20261113_0307_shared-conversation-runtime](features/F_20261113_0307_shared-conversation-runtime.md) | F | I-04 共享主窗口的 Runtime 与 adapter 装配 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/agents/harness/common | jiuwenswarm/runtime/session/conversation.py, jiuwenswarm/runtime/service.py, jiuwenswarm/runtime/session_provisioner.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/team_helpers.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/agents/harness/common/session_ops_service.py | [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) |
 | [B_20261029_1117_resident-worker-version-mismatch](bugfix/runtime/B_20261029_1117_resident-worker-version-mismatch.md) | B | 常驻旧 Worker 导致 AgentServer runtime failed | 待确认 | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter | — | [D-20261028-1704-agent-leader-context-handoff](designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) |
 | [B_20261030_0330_canonical-work-mode-handoff](bugfix/runtime/B_20261030_0330_canonical-work-mode-handoff.md) | B | 显式 work mode 被 TUI Session code profile 阻断交接 | 待确认 | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter | — | [D-20261028-1704-agent-leader-context-handoff](designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) |
 | [S_01_agent-leader-context-handoff](specs/runtime/S_01_agent-leader-context-handoff.md) | S | 同一 Session 的 Agent / Leader 对话归属 | 待确认 | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter | — | — |
 
-<a id="module-23"></a>
+<a id="module-27"></a>
+
+## jiuwenswarm/runtime/session
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [S_02_session-operation-ownership](specs/runtime/S_02_session-operation-ownership.md) | S | Session 运行与模式切换的操作互斥 | Yanqing-Shi | jiuwenswarm/runtime/session, jiuwenswarm/agents/harness/team | jiuwenswarm/runtime/session/operation_lock.py, jiuwenswarm/runtime/session/native_operation.py, jiuwenswarm/runtime/session/coordinator.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/runtime/session/project_store.py | — |
+
+<a id="module-28"></a>
 
 ## jiuwenswarm/server
 
@@ -260,17 +313,19 @@ generated: true
 | [B_20261029_0927_missing-supervisor-entry](bugfix/jiuwenswarm/server/B_20261029_0927_missing-supervisor-entry.md) | B | 重启 AgentServer 时缺少 supervisor 启动函数 | xinyang_bali | jiuwenswarm/server | jiuwenswarm/server/app_agentserver.py | 无独立 D：用户请求重启时发现当前工作区入口不完整，恢复既有 Front/Worker 启动契约。 |
 | [B_20261031_1042_pr9317-review](bugfix/jiuwenswarm/server/B_20261031_1042_pr9317-review.md) | B | PR 9317 插件模式校验与 Front 遗留启动链清理 | xinyang_bali | jiuwenswarm/server, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/server/app_agentserver.py, jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, tests/unit_tests/test_app_agentserver.py, tests/unit_tests/agentserver/test_ttse_plugin_runtime.py | 无独立 D：根据 openJiuwen-bot 检视意见清理现有实现，不引入新接口或架构方案，无独立 D。 |
 
-<a id="module-24"></a>
+<a id="module-29"></a>
 
 ## jiuwenswarm/server/runtime/agent_adapter
 
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
 | [D-20261028-1704-agent-leader-context-handoff](designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) | D | 单智能体与团队 Leader 的最小上下文交接 | 待确认 | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/runtime, agent-core/openjiuwen/agent_teams/harness, agent-core/openjiuwen/core/context_engine | — | — |
+| [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) | D | Session 共享主对话窗口 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/server/runtime/session, jiuwenswarm/agents/harness/common, agent-core/openjiuwen/core/context_engine, agent-core/openjiuwen/core/session, agent-core/openjiuwen/harness, agent-core/openjiuwen/agent_teams/harness | — | — |
 | [F_20261027_1843_ttse-plugin-rail](features/F_20261027_1843_ttse-plugin-rail.md) | F | TTSE 以插件 Rail 接入主 Coding Agent | xinyang_bali | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/agents/harness, jiuwenswarm/extensions/sdk, jiuwenswarm/resources/plugins/ttse | jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py, jiuwenswarm/extensions/sdk/plugin_runtime.py, jiuwenswarm/agents/harness/agent_observability.py, jiuwenswarm/resources/plugins/ttse/manifest.json, scripts/package_ttse_plugin.py | 无独立 D：用户确认执行 D:/files/自演进/方案/ttse适配code agent 中的外部适配方案，该资料没有仓内 D 标识。 |
 | [F_20261027_2015_bilingual-progressive-tool-discovery](features/jiuwenswarm/agents/harness/common/tools/F_20261027_2015_bilingual-progressive-tool-discovery.md) | F | 中英文渐进式工具发现 | MengHan18 | jiuwenswarm/agents/harness/common/tools, jiuwenswarm/agents/harness/common/rails, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/agents/harness/common/tools/tool_discovery_catalog.py, jiuwenswarm/agents/harness/common/tools/tool_retrieval_toolkits.py, jiuwenswarm/agents/harness/common/rails/tool_retrieval_prompt_rail.py, jiuwenswarm/agents/harness/code/rails/heartbeat_rail.py, jiuwenswarm/agents/harness/team/rails/team_member_skill_toolkit_rail.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py, tests/unit_tests/agentserver/test_tool_discovery_language.py | 无独立 D：针对 Issue 5615 后续扩展的已确认实现，未建立独立仓内设计编号 |
 | [F_20261029_0001_agent-leader-context-handoff](features/F_20261029_0001_agent-leader-context-handoff.md) | F | 单智能体与 Leader 上下文交接实施记录 | 待确认 | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter | — | [D-20261028-1704-agent-leader-context-handoff](designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) |
 | [F_20261029_1757_mcp-app-agent-stack-refresh](features/F_20261029_1757_mcp-app-agent-stack-refresh.md) | F | MCP App 到 Agent 的 stacked PR 更新 | LI Jinyang | jiuwenswarm/channels/web/frontend, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/channels/web/frontend/src/features/mcpApps/mcpAppContext.ts, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/McpAppView.tsx, jiuwenswarm/channels/web/frontend/src/App.tsx, jiuwenswarm/channels/web/frontend/src/hooks/useWebSocket.ts, jiuwenswarm/server/runtime/agent_adapter/user_turn.py | 无独立 D：本次迁移已有 follow-up 实现，不新建方案；需求依据为主仓库 issue 4944 和原 MR !1。 |
+| [F_20261113_0307_shared-conversation-runtime](features/F_20261113_0307_shared-conversation-runtime.md) | F | I-04 共享主窗口的 Runtime 与 adapter 装配 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/agents/harness/common | jiuwenswarm/runtime/session/conversation.py, jiuwenswarm/runtime/service.py, jiuwenswarm/runtime/session_provisioner.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/team_helpers.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/agents/harness/common/session_ops_service.py | [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) |
 | [B_20261029_1117_resident-worker-version-mismatch](bugfix/runtime/B_20261029_1117_resident-worker-version-mismatch.md) | B | 常驻旧 Worker 导致 AgentServer runtime failed | 待确认 | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter | — | [D-20261028-1704-agent-leader-context-handoff](designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) |
 | [B_20261030_0330_canonical-work-mode-handoff](bugfix/runtime/B_20261030_0330_canonical-work-mode-handoff.md) | B | 显式 work mode 被 TUI Session code profile 阻断交接 | 待确认 | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter | — | [D-20261028-1704-agent-leader-context-handoff](designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) |
 | [B_20261031_0946_ttse-codecheck-boundaries](bugfix/jiuwenswarm/B_20261031_0946_ttse-codecheck-boundaries.md) | B | TTSE 相关 CodeCheck 受保护访问与关闭条件复杂度修复 | xinyang_bali | jiuwenswarm, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/openjiuwen_fs_rwlock_patch.py, jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, tests/unit_tests/test_openjiuwen_fs_rwlock_patch.py, tests/unit_tests/agentserver/test_ttse_plugin_runtime.py, scripts/package_ttse_plugin.py, tests/unit_tests/server/extensions/test_ttse_plugin_package.py | 无独立 D：按用户提供的 20 项 CodeCheck 清单修复实现边界，沿用当前 TTSE 通用运行契约，无独立 D。 |
@@ -282,7 +337,16 @@ generated: true
 | [S_01_tool-discovery-language](specs/jiuwenswarm/agents/harness/common/tools/S_01_tool-discovery-language.md) | S | 渐进式工具发现语言与原始执行契约 | MengHan18 | jiuwenswarm/agents/harness/common/tools, jiuwenswarm/agents/harness/common/rails, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/agents/harness/common/tools/tool_discovery_catalog.py, jiuwenswarm/agents/harness/common/tools/tool_retrieval_toolkits.py, jiuwenswarm/agents/harness/common/rails/tool_retrieval_prompt_rail.py, jiuwenswarm/agents/harness/code/rails/heartbeat_rail.py, jiuwenswarm/agents/harness/team/rails/team_member_skill_toolkit_rail.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py | — |
 | [S_03_native-plugin-runtime](specs/jiuwenswarm/server/runtime/agent_adapter/S_03_native-plugin-runtime.md) | S | 原生插件通用运行服务与生命周期 | xinyang_bali | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/extensions/sdk | jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/extensions/sdk/plugin_runtime.py | — |
 
-<a id="module-25"></a>
+<a id="module-30"></a>
+
+## jiuwenswarm/server/runtime/session
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) | D | Session 共享主对话窗口 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/server/runtime/session, jiuwenswarm/agents/harness/common, agent-core/openjiuwen/core/context_engine, agent-core/openjiuwen/core/session, agent-core/openjiuwen/harness, agent-core/openjiuwen/agent_teams/harness | — | — |
+| [F_20261112_0650_session-operation-ownership](features/F_20261112_0650_session-operation-ownership.md) | F | I-00 Session 操作锁与生命周期基础 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/session, jiuwenswarm/agents/harness/team | jiuwenswarm/runtime/session/operation_lock.py, jiuwenswarm/runtime/session/native_operation.py, jiuwenswarm/runtime/session/coordinator.py, jiuwenswarm/runtime/service.py, jiuwenswarm/runtime/context_handoff.py, jiuwenswarm/agents/harness/team/team_manager.py, jiuwenswarm/server/runtime/session/project_store.py, jiuwenswarm/server/runtime/session/session_archive.py, jiuwenswarm/server/runtime/session/lifecycle.py, tests/unit_tests/runtime/test_session_operation_lock.py, tests/unit_tests/runtime/test_runtime_session_coordinator.py, tests/unit_tests/runtime/test_runtime_service.py, tests/unit_tests/runtime/test_interaction_answer_delivery.py, tests/unit_tests/server/test_archive_lifecycle.py, tests/unit_tests/agentserver/test_heartbeat_session_runtime.py, docs/zh/项目与会话管理.md, docs/en/Project-Session-Management.md | [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) |
+
+<a id="module-31"></a>
 
 ## jiuwenswarm/server/runtime/skill
 
@@ -290,7 +354,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261103_0936_skill-action-param-type-validation](bugfix/jiuwenswarm/server/runtime/skill/B_20261103_0936_skill-action-param-type-validation.md) | B | 技能安装/更新/卸载入口参数类型校验缺失修复 | openjiuwen_ai | jiuwenswarm/server/runtime/skill | jiuwenswarm/server/runtime/skill/skill_manager.py, tests/unit_tests/agentserver/test_skill_manager_enterprise_state.py | 无独立 D：三个入口的参数契约（string 标识、boolean force）已由前端 webHttpClient 与 EnterpriseSkillSourcePanel 既有调用形态声明，本次为入口 类型校验层缺失的补接，无独立设计。 |
 
-<a id="module-26"></a>
+<a id="module-32"></a>
 
 ## jiuwenswarm/server/supervisor
 
@@ -298,7 +362,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261107_1505_6226-forwarding-replay](bugfix/jiuwenswarm/server/supervisor/B_20261107_1505_6226-forwarding-replay.md) | B | 历史回放触发转发队列溢出及前端计时不收尾 | kdgmpw | jiuwenswarm/server/supervisor, jiuwenswarm/channels/web/frontend | jiuwenswarm/server/supervisor/runtime_supervisor.py, jiuwenswarm/channels/web/frontend/src/hooks/useWebSocket.ts, tests/unit_tests/agentserver/test_supervisor_forwarding.py, jiuwenswarm/channels/web/frontend/tests/sessionInput.test.mjs | 无独立 D：对现有有界转发及前端终态处理的小范围修复，无独立设计。 |
 
-<a id="module-27"></a>
+<a id="module-33"></a>
 
 ## jiuwenswarm/server/worker
 
@@ -306,7 +370,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261105_1518_worker-dispatch-slot-accounting](bugfix/jiuwenswarm/server/worker/B_20261105_1518_worker-dispatch-slot-accounting.md) | B | Worker 派发容量排除已返回的 handler | kdgmpw | jiuwenswarm/server/worker | jiuwenswarm/server/worker/event_store.py | 无独立 D：按会话中确认的最小修复方案调整 Worker 内部计数。 |
 
-<a id="module-28"></a>
+<a id="module-34"></a>
 
 ## scripts
 
@@ -314,7 +378,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261031_1006_ttse-runtime-fixture](bugfix/tests/unit_tests/agentserver/B_20261031_1006_ttse-runtime-fixture.md) | B | TTSE runtime UT 使用版本化夹具修复整批 setup error | xinyang_bali | tests/unit_tests/agentserver, tests/unit_tests/server/extensions, tests/fixtures/ttse_plugin, scripts | tests/unit_tests/agentserver/test_ttse_plugin_runtime.py, tests/unit_tests/server/extensions/test_ttse_plugin_package.py, tests/unit_tests/conftest.py, tests/fixtures/ttse_plugin/manifest.json, tests/fixtures/ttse_plugin/config.yaml, tests/fixtures/ttse_plugin/rails/ttse_plugin_rail.py, scripts/package_ttse_plugin.py | 无独立 D：修复用户报告的 CI 测试数据缺失，保持现有 plugin_runtime v1 与生产默认打包路径，无独立 D。 |
 
-<a id="module-29"></a>
+<a id="module-35"></a>
 
 ## tests/fixtures/ttse_plugin
 
@@ -322,7 +386,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261031_1006_ttse-runtime-fixture](bugfix/tests/unit_tests/agentserver/B_20261031_1006_ttse-runtime-fixture.md) | B | TTSE runtime UT 使用版本化夹具修复整批 setup error | xinyang_bali | tests/unit_tests/agentserver, tests/unit_tests/server/extensions, tests/fixtures/ttse_plugin, scripts | tests/unit_tests/agentserver/test_ttse_plugin_runtime.py, tests/unit_tests/server/extensions/test_ttse_plugin_package.py, tests/unit_tests/conftest.py, tests/fixtures/ttse_plugin/manifest.json, tests/fixtures/ttse_plugin/config.yaml, tests/fixtures/ttse_plugin/rails/ttse_plugin_rail.py, scripts/package_ttse_plugin.py | 无独立 D：修复用户报告的 CI 测试数据缺失，保持现有 plugin_runtime v1 与生产默认打包路径，无独立 D。 |
 
-<a id="module-30"></a>
+<a id="module-36"></a>
 
 ## tests/unit_tests/agentserver
 
@@ -331,7 +395,7 @@ generated: true
 | [B_20261031_1006_ttse-runtime-fixture](bugfix/tests/unit_tests/agentserver/B_20261031_1006_ttse-runtime-fixture.md) | B | TTSE runtime UT 使用版本化夹具修复整批 setup error | xinyang_bali | tests/unit_tests/agentserver, tests/unit_tests/server/extensions, tests/fixtures/ttse_plugin, scripts | tests/unit_tests/agentserver/test_ttse_plugin_runtime.py, tests/unit_tests/server/extensions/test_ttse_plugin_package.py, tests/unit_tests/conftest.py, tests/fixtures/ttse_plugin/manifest.json, tests/fixtures/ttse_plugin/config.yaml, tests/fixtures/ttse_plugin/rails/ttse_plugin_rail.py, scripts/package_ttse_plugin.py | 无独立 D：修复用户报告的 CI 测试数据缺失，保持现有 plugin_runtime v1 与生产默认打包路径，无独立 D。 |
 | [B_20261031_1048_ttse-core-dependent-ut](bugfix/tests/unit_tests/agentserver/B_20261031_1048_ttse-core-dependent-ut.md) | B | 暂时移除依赖未合入 core 工厂能力的插件 UT | xinyang_bali | tests/unit_tests/agentserver | tests/unit_tests/agentserver/test_ttse_plugin_runtime.py | 无独立 D：用户明确要求暂时删除依赖 core 的相关 UT，不调整依赖或运行实现，无独立 D。 |
 
-<a id="module-31"></a>
+<a id="module-37"></a>
 
 ## tests/unit_tests/gateway
 
@@ -339,7 +403,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261031_1038_cron-migration-ut](bugfix/tests/unit_tests/B_20261031_1038_cron-migration-ut.md) | B | cron 会话迁移的实时流测试与类清点兼容修复 | kdgmpw | tests/unit_tests/gateway, tests/unit_tests/personal_context | tests/unit_tests/gateway/test_cron_live_bus.py, tests/unit_tests/personal_context/test_closed_class_inventory.py | 无独立 D：对现有测试契约和解释器兼容性的小范围修复，无独立设计。 |
 
-<a id="module-32"></a>
+<a id="module-38"></a>
 
 ## tests/unit_tests/personal_context
 
@@ -347,7 +411,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261031_1038_cron-migration-ut](bugfix/tests/unit_tests/B_20261031_1038_cron-migration-ut.md) | B | cron 会话迁移的实时流测试与类清点兼容修复 | kdgmpw | tests/unit_tests/gateway, tests/unit_tests/personal_context | tests/unit_tests/gateway/test_cron_live_bus.py, tests/unit_tests/personal_context/test_closed_class_inventory.py | 无独立 D：对现有测试契约和解释器兼容性的小范围修复，无独立设计。 |
 
-<a id="module-33"></a>
+<a id="module-39"></a>
 
 ## tests/unit_tests/server/extensions
 
@@ -355,7 +419,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261031_1006_ttse-runtime-fixture](bugfix/tests/unit_tests/agentserver/B_20261031_1006_ttse-runtime-fixture.md) | B | TTSE runtime UT 使用版本化夹具修复整批 setup error | xinyang_bali | tests/unit_tests/agentserver, tests/unit_tests/server/extensions, tests/fixtures/ttse_plugin, scripts | tests/unit_tests/agentserver/test_ttse_plugin_runtime.py, tests/unit_tests/server/extensions/test_ttse_plugin_package.py, tests/unit_tests/conftest.py, tests/fixtures/ttse_plugin/manifest.json, tests/fixtures/ttse_plugin/config.yaml, tests/fixtures/ttse_plugin/rails/ttse_plugin_rail.py, scripts/package_ttse_plugin.py | 无独立 D：修复用户报告的 CI 测试数据缺失，保持现有 plugin_runtime v1 与生产默认打包路径，无独立 D。 |
 
-<a id="module-34"></a>
+<a id="module-40"></a>
 
 ## 未分类
 
