@@ -1264,7 +1264,7 @@ async def test_busy_foreground_defers_heartbeat_without_creating_execution(make_
         await _finish(chain)
 
 
-async def test_heartbeat_does_not_serialize_active_goal_execution(make_chain):
+async def test_heartbeat_waits_for_active_goal_operation(make_chain):
     chain = await make_chain()
     await chain.coordinator.register_session(
         SESSION, "web", SessionPersistencePolicy.PERSISTENT
@@ -1287,11 +1287,14 @@ async def test_heartbeat_does_not_serialize_active_goal_execution(make_chain):
     try:
         await asyncio.wait_for(goal_entered.wait(), 2)
         await chain.heartbeat.scheduler._tick_once()
-        assert (await _settle(chain)).run_state.last_run_status == "succeeded"
+        await _wait_heartbeat_state(chain, "queued")
         assert not task.done()
+        goal_release.set()
+        await asyncio.wait_for(task, 2)
+        assert (await _settle(chain)).run_state.last_run_status == "succeeded"
         states = {item.work_kind: item.state.value for item in _executions(chain)}
         assert states == {
-            SessionWorkKind.GOAL_STREAM: "running",
+            SessionWorkKind.GOAL_STREAM: "succeeded",
             SessionWorkKind.HEARTBEAT: "succeeded",
         }
     finally:

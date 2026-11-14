@@ -18,6 +18,7 @@ from jiuwenswarm.common.schema.agent import AgentRequest
 from jiuwenswarm.common.schema.message import ReqMethod
 from jiuwenswarm.runtime.service import AgentRuntime, SessionModeSwitchError
 from jiuwenswarm.runtime.session import SessionWorkKind
+from jiuwenswarm.runtime.session.operation_lock import acquire_operation
 from jiuwenswarm.server.runtime.session import lifecycle, session_history, session_metadata
 
 
@@ -185,6 +186,29 @@ def test_mode_set_rejects_stale_expectation_busy_and_foreign_user(mode_session, 
     assert session_metadata.get_session_metadata(
         "one-session", cache_bust=True, enable_writeback=False,
     )["mode"] == "agent.code.normal"
+
+
+def test_mode_set_is_refused_for_a_run_that_arrived_or_holds_the_session(mode_session, session_channel):
+    """Run first, then mode switch: the switch fails whether or not the run has started."""
+    runtime = AgentRuntime(agent_manager=AsyncMock(), initializer=AsyncMock())
+
+    def refused():
+        with pytest.raises(SessionModeSwitchError) as busy:
+            _switch(runtime, session_channel, "team.work.normal", "agent.code.normal")
+        return busy.value.code
+
+    # Arrived at the server, not started yet.
+    runtime.begin_chat_request("one-session", "arrived-not-started")
+    assert refused() == "SESSION_BUSY"
+    runtime.end_chat_request("one-session", "arrived-not-started")
+    # Owning the Session operation.
+    with acquire_operation("session", "one-session"):
+        assert refused() == "SESSION_BUSY"
+    assert session_metadata.get_session_metadata(
+        "one-session", cache_bust=True, enable_writeback=False,
+    )["mode"] == "agent.code.normal"
+    # With no run ahead of it the same switch succeeds.
+    assert _switch(runtime, session_channel, "team.work.normal", "agent.code.normal")["changed"] is True
 
 
 def test_mode_get_reads_persisted_mode_and_checks_user(mode_session, session_channel):
