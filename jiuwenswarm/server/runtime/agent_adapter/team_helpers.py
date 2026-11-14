@@ -11,7 +11,7 @@ import os
 import re
 import time
 from collections.abc import Awaitable, Callable
-from contextlib import AsyncExitStack, aclosing
+from contextlib import AsyncExitStack, aclosing, nullcontext
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -3537,10 +3537,24 @@ async def _process_team_message_stream_with_design(
     design_bindings = await _bind_design_round_if_needed(request)
     npc_team = (getattr(request, "trusted_runtime_binding", None) or {}).get("app_role_team") is True
     try:
+        from jiuwenswarm.runtime.session.conversation import load_main_binding, prepare_shared_leader, supports_shared_mode
+        from openjiuwen.agent_teams.harness import bind_leader_preparation
+        from jiuwenswarm.runtime.session.model import TEAM_ATTACH_ONLY_PARAM
+
+        shared = (await load_main_binding(request.session_id)
+                  if supports_shared_mode(request.params.get("mode"))
+                  and not request.params.get(TEAM_ATTACH_ONLY_PARAM) else None)
         async with aclosing(_process_team_message_stream_locked(
             request, inputs, deep_agent
         )) as stream:
-            async for chunk in stream:
+            while True:
+                preparation = (bind_leader_preparation(prepare_shared_leader)
+                               if shared is not None else nullcontext())
+                with preparation:
+                    try:
+                        chunk = await anext(stream)
+                    except StopAsyncIteration:
+                        break
                 if npc_team and chunk.payload and chunk.payload.get("event_type") not in {
                     "chat.final", "chat.error", "chat.processing_status", "chat.input_received",
                 }:
@@ -5548,9 +5562,19 @@ async def _consume_stream_with_query(
             get_kv_cache_runtime,
         )
 
+        from jiuwenswarm.runtime.session.conversation import load_main_binding, supports_shared_mode
+        from openjiuwen.core.session.checkpointer import CheckpointerFactory
+        from jiuwenswarm.server.runtime.session.session_metadata import get_session_metadata
+
+        metadata = get_session_metadata(session_id, cache_bust=True, enable_writeback=False)
+        binding = await load_main_binding(session_id) if supports_shared_mode(metadata.get("mode")) else None
+        session_options = ({"conversation_binding": binding, "checkpointer": CheckpointerFactory.get_checkpointer(),
+                            "team_id": team_spec.team_name}
+                           if binding is not None else {})
         team_session = create_agent_team_session(
             session_id=session_id,
             kv_cache_runtime=get_kv_cache_runtime(),
+            **session_options,
         )
         # Interrupt-resume wait state: the no-input runtime stream is driven
         # with a frame budget and an overall budget until the team.recovered

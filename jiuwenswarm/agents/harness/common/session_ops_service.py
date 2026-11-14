@@ -1627,6 +1627,9 @@ async def warmup_session_context(
     ``history_snapshot`` is an optional request-local pre-read. Reuse requires
     the same owner, lifecycle generation, cutoff and unchanged history file;
     otherwise this function keeps its original on-disk read and filtering.
+
+    A Session bound to a shared conversation only refreshes that record; public
+    history never seeds or replaces it.
     """
     react_agent = getattr(deep_agent, "react_agent", None)
     if react_agent is None:
@@ -1637,6 +1640,18 @@ async def warmup_session_context(
         await initialize()
 
     context_engine = react_agent.context_engine
+    from openjiuwen.core.context_engine import ConversationBinding
+
+    session = resolve_live_agent_session(deep_agent, session_id)
+    get_binding = getattr(session, "get_conversation_binding", None)
+    if callable(get_binding) and isinstance(get_binding(), ConversationBinding):
+        from openjiuwen.core.single_agent.interrupt.state import INTERRUPTION_KEY
+
+        await context_engine.create_context(
+            session=session, processors=_get_context_processors(react_agent),
+            allow_pending_tool_calls=session.get_state(INTERRUPTION_KEY) is not None,
+        )
+        return True
     live_session = resolve_live_agent_session(deep_agent, session_id)
     if live_session is not None:
         from jiuwenswarm.runtime.context_checkpointer import bind_context_checkpoint

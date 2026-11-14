@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import uuid
-from contextlib import aclosing
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Awaitable, Callable, TypeVar
 
@@ -27,11 +27,17 @@ from jiuwenswarm.runtime.session.model import (
     SessionLifecycleContext,
     SessionPersistencePolicy,
     SessionWorkKind,
+    SessionRouteChangedError,
     TeamExecutionContext,
     TeamExecutionDetails,
     TeamWaiterKind,
 )
 from jiuwenswarm.runtime.session.work_scheduler import SessionWorkScheduler
+from jiuwenswarm.runtime.session.operation_lock import (
+    acquire_operation,
+    OperationLease,
+    wait_for_operation,
+)
 from jiuwenswarm.runtime.session_input import SessionInputRejectedError, SessionInputTargetError
 
 T = TypeVar("T")
@@ -89,6 +95,124 @@ class RuntimeSessionCoordinator:
         self._generations: dict[str, int] = {}
         self._accepting = True
         self._lock = asyncio.Lock()
+        self._operation_leases: dict[str, tuple[SessionExecutionHandle, OperationLease]] = {}
+        self._running_operations: set[str] = set()
+        self._team_operation_leases: dict[tuple[str, int], OperationLease] = {}
+        self._native_operation_leases: dict[object, tuple[str, int, OperationLease]] = {}
+        self._operation_admission: Callable[
+            [str, SessionWorkKind], Awaitable[Callable[[], Awaitable[None]] | None]
+        ] | None = None
+
+    def set_operation_admission(
+        self, admission: Callable[
+            [str, SessionWorkKind], Awaitable[Callable[[], Awaitable[None]] | None]
+        ],
+    ) -> None:
+        """Keep host preemption/admission outside execution-lock acquisition."""
+        self._operation_admission = admission
+
+    @asynccontextmanager
+    async def _operation_scope(
+        self, record: _SessionRecord, handle: SessionExecutionHandle,
+        on_owned: Callable[[], None] | None = None,
+    ) -> AsyncIterator[None]:
+        """Hold Session execution ownership around one run.
+
+        ``on_owned`` runs once ownership is held and before the run starts. The
+        Session mode cannot change from that point, so the host confirms there
+        the run type it selected earlier.
+        """
+        if (
+            handle.work_kind is SessionWorkKind.GOAL_ATTACH
+            or (handle.team is not None and handle.team.observation_only)
+        ):
+            yield
+            return
+        release_admission = None
+        try:
+            self._release_finished_operations()
+            if self._operation_admission is not None:
+                release_admission = await self._operation_admission(handle.session_id, handle.work_kind)
+            lease = self._continuing_operation(handle)
+            if lease is None:
+                lease = await wait_for_operation(handle.session_id)
+            self._operation_leases[handle.execution_id] = (handle, lease)
+            self._running_operations.add(handle.execution_id)
+            if self._require_open_session(handle.session_id) is not record:
+                raise RuntimeError("session operation belongs to a closed generation")
+            if on_owned is not None:
+                on_owned()
+            yield
+        except BaseException as exc:
+            if handle.execution_id in self._running_operations or not handle.state.terminal:
+                self._registry.mark_terminal(
+                    handle,
+                    SessionExecutionState.CANCELLED
+                    if isinstance(exc, (asyncio.CancelledError, SessionRouteChangedError))
+                    else SessionExecutionState.FAILED,
+                    error=exc,
+                )
+            self._refresh_session_state(record)
+            raise
+        finally:
+            self._running_operations.discard(handle.execution_id)
+            self._release_finished_operations()
+            if release_admission is not None:
+                await release_admission()
+
+    def _continuing_operation(self, handle: SessionExecutionHandle) -> OperationLease | None:
+        if handle.parent_execution_id in self._operation_leases:
+            return self._operation_leases[handle.parent_execution_id][1].retain()
+        if handle.work_kind is SessionWorkKind.GOAL_CONTROL:
+            for owner, lease in self._operation_leases.values():
+                if (
+                    owner.session_id == handle.session_id
+                    and owner.generation == handle.generation
+                    and owner.work_kind is SessionWorkKind.GOAL_STREAM
+                ):
+                    return lease.retain()
+        if handle.team is not None:
+            lease = self._team_operation_lease(handle.session_id, handle.generation)
+            if lease is not None:
+                return lease.retain()
+        return None
+
+    def _team_operation_lease(self, session_id: str, generation: int) -> OperationLease | None:
+        for sid, native_generation, lease in self._native_operation_leases.values():
+            if sid == session_id and native_generation == generation:
+                return lease
+        lease = self._team_operation_leases.get((session_id, generation))
+        if lease is not None:
+            return lease
+        for owner, lease in self._operation_leases.values():
+            if owner.session_id == session_id and owner.generation == generation and owner.team is not None:
+                return lease
+        return None
+
+    def begin_native_operation(self, session_id: str, token: object) -> bool:
+        """Admit an actual Leader cycle, including autonomous continuations."""
+        record = self._require_open_session(session_id)
+        if token in self._native_operation_leases:
+            return False
+        lease = self._team_operation_lease(session_id, record.generation)
+        if lease is not None:
+            lease = lease.retain()
+        else:
+            lease = acquire_operation("session", session_id)
+        self._native_operation_leases[token] = (session_id, record.generation, lease)
+        return True
+
+    def end_native_operation(self, token: object) -> None:
+        current = self._native_operation_leases.pop(token, None)
+        if current is not None:
+            current[2].close()
+
+    def _release_finished_operations(self) -> None:
+        for execution_id, (handle, lease) in tuple(self._operation_leases.items()):
+            parked = handle.team is not None and handle.state is SessionExecutionState.WAITING_FOR_INPUT
+            if parked or (handle.state.terminal and execution_id not in self._running_operations):
+                self._operation_leases.pop(execution_id)
+                lease.close()
 
     async def register_session(
         self,
@@ -130,6 +254,7 @@ class RuntimeSessionCoordinator:
         timeout_scope: asyncio.Timeout | None = None,
         timeout_error: str = "execution deadline exceeded",
         team: TeamExecutionDetails | None = None,
+        on_owned: Callable[[], None] | None = None,
     ) -> T:
         record = self._require_open_session(session_id)
         team_target = None
@@ -145,6 +270,7 @@ class RuntimeSessionCoordinator:
             wait_for_terminal=wait_for_terminal,
             timeout_scope=timeout_scope,
             timeout_error=timeout_error,
+            on_owned=on_owned,
         )
         if team_target is not None:
             parent, control_id = team_target
@@ -197,8 +323,9 @@ class RuntimeSessionCoordinator:
         wait_for_terminal: bool = False,
         timeout_scope: asyncio.Timeout | None = None,
         timeout_error: str = "execution deadline exceeded",
+        on_owned: Callable[[], None] | None = None,
     ) -> T:
-        async def tracked() -> T:
+        async def tracked_body() -> T:
             self._registry.mark_running(handle)
             record.state = RuntimeSessionState.ACTIVE
             try:
@@ -239,6 +366,10 @@ class RuntimeSessionCoordinator:
                 return value
             finally:
                 self._refresh_session_state(record)
+
+        async def tracked() -> T:
+            async with self._operation_scope(record, handle, on_owned):
+                return await tracked_body()
 
         try:
             if handle.work_kind.scheduled:
@@ -343,6 +474,7 @@ class RuntimeSessionCoordinator:
             session_id, answered, duplicate="control input is already being delivered"
         )
         claimed = parent.waiting_control_ids
+        handle = None
         try:
             handle = self._new_execution(
                 record,
@@ -350,6 +482,7 @@ class RuntimeSessionCoordinator:
                 SessionWorkKind.CONTROL_INPUT,
                 parent_execution_id=parent.execution_id,
             )
+            self._retain_control_operation(handle)
             handle.answered_control_ids = frozenset(answered)
             parent_was_waiting = (
                 parent.state is SessionExecutionState.WAITING_FOR_CONTROL
@@ -413,6 +546,8 @@ class RuntimeSessionCoordinator:
                 )
             return value
         finally:
+            if handle is not None:
+                self._running_operations.discard(handle.execution_id)
             self._release_control_parent(record, parent)
             self._refresh_session_state(record)
 
@@ -501,6 +636,7 @@ class RuntimeSessionCoordinator:
         claimed = parent.waiting_control_ids
         reissued: set[str] = set()
         parent_was_waiting = parent.state is SessionExecutionState.WAITING_FOR_CONTROL
+        handle = None
         try:
             handle = self._new_execution(
                 record,
@@ -508,6 +644,7 @@ class RuntimeSessionCoordinator:
                 SessionWorkKind.CONTROL_INPUT,
                 parent_execution_id=parent.execution_id,
             )
+            self._retain_control_operation(handle)
             handle.answered_control_ids = frozenset(answered)
             if parent_was_waiting:
                 self._registry.resume_waiting(parent)
@@ -552,8 +689,16 @@ class RuntimeSessionCoordinator:
                 if handle.task is asyncio.current_task():
                     handle.task = None
         finally:
+            if handle is not None:
+                self._running_operations.discard(handle.execution_id)
             self._release_control_parent(record, parent)
             self._refresh_session_state(record)
+
+    def _retain_control_operation(self, handle: SessionExecutionHandle) -> None:
+        lease = self._continuing_operation(handle)
+        if lease is not None:
+            self._operation_leases[handle.execution_id] = (handle, lease)
+            self._running_operations.add(handle.execution_id)
 
     async def _claim_control_parent(
         self, session_id: str, answered: tuple[str, ...], *, duplicate: str
@@ -656,6 +801,7 @@ class RuntimeSessionCoordinator:
         interaction_ids: Callable[[T], frozenset[str]] | None = None,
         parent_execution_id: str | None = None,
         channel_id: str = "default",
+        on_owned: Callable[[], None] | None = None,
     ) -> AsyncIterator[T]:
         """Run a transport-neutral stream with a parameterless operation."""
         if work_kind in _TEAM_WORK_KINDS:
@@ -668,6 +814,7 @@ class RuntimeSessionCoordinator:
             interaction_ids=interaction_ids,
             parent_execution_id=parent_execution_id,
             channel_id=channel_id,
+            on_owned=on_owned,
         )
         async with aclosing(stream):
             async for item in stream:
@@ -686,6 +833,7 @@ class RuntimeSessionCoordinator:
         details: TeamExecutionDetails,
         interaction_ids: Callable[[T], frozenset[str]] | None = None,
         channel_id: str = "default",
+        on_owned: Callable[[], None] | None = None,
     ) -> AsyncIterator[T]:
         """Run a Team stream with explicit Team execution ownership."""
         if work_kind not in _TEAM_WORK_KINDS:
@@ -715,6 +863,7 @@ class RuntimeSessionCoordinator:
             interaction_ids=interaction_ids,
             channel_id=channel_id,
             team=details,
+            on_owned=on_owned,
         )
         async with aclosing(stream):
             async for item in stream:
@@ -734,6 +883,7 @@ class RuntimeSessionCoordinator:
         parent_execution_id: str | None = None,
         channel_id: str = "default",
         team: TeamExecutionDetails | None = None,
+        on_owned: Callable[[], None] | None = None,
     ) -> AsyncIterator[T]:
         """Run the shared stream lifecycle for generic and Team entry points."""
         record = self._require_open_session(session_id)
@@ -750,7 +900,7 @@ class RuntimeSessionCoordinator:
         )
         queue: asyncio.Queue[_StreamItem] = asyncio.Queue(self._stream_buffer_size)
 
-        async def produce() -> None:
+        async def produce_body() -> None:
             self._registry.mark_running(handle)
             record.state = RuntimeSessionState.ACTIVE
             stream: AsyncIterator[T] | None = None
@@ -802,6 +952,25 @@ class RuntimeSessionCoordinator:
                 # forever after draining the final data item.
                 if terminal_item is not None:
                     await queue.put(terminal_item)
+
+        async def produce() -> None:
+            started = False
+            try:
+                async with self._operation_scope(record, handle, on_owned):
+                    started = True
+                    await produce_body()
+            except BaseException as exc:
+                # Acquisition/admission failures also have to wake the consumer.
+                if not started:
+                    self._registry.mark_terminal(
+                        handle,
+                        SessionExecutionState.CANCELLED
+                        if isinstance(exc, (asyncio.CancelledError, SessionRouteChangedError))
+                        else SessionExecutionState.FAILED,
+                        error=exc,
+                    )
+                    await queue.put(_StreamItem(error=exc, done=True))
+                raise
 
         # Streamed mailbox work already owns host admission. Scheduling it in
         # the chat lane can deadlock behind a user turn waiting for that admission.
@@ -944,6 +1113,10 @@ class RuntimeSessionCoordinator:
             )
         if self._sessions.get(session_id) is record:
             record.state = RuntimeSessionState.CLOSED
+        round_lease = self._team_operation_leases.pop((session_id, target_generation), None)
+        if round_lease is not None:
+            round_lease.close()
+        self._release_finished_operations()
         return CloseSessionResult(session_id, target_generation, True)
 
     async def quiesce_session(
@@ -983,6 +1156,9 @@ class RuntimeSessionCoordinator:
         generation: int,
     ) -> None:
         """Park every persistent response owner for one idle Team generation."""
+        lease = self._team_operation_leases.pop((session_id, generation), None)
+        if lease is not None:
+            lease.close()
         for handle in self._registry.select(
             session_id=session_id,
             generation=generation,
@@ -1000,6 +1176,16 @@ class RuntimeSessionCoordinator:
 
     def resume_waiting_for_input(self, session_id: str, generation: int) -> None:
         """Mark persistent Team response owners running for a new input."""
+        record = self._sessions.get(session_id)
+        if record is None or record.generation != generation:
+            return
+        self._require_open_session(session_id)
+        key = (session_id, generation)
+        if key not in self._team_operation_leases:
+            current = self._team_operation_lease(session_id, generation)
+            self._team_operation_leases[key] = (
+                current.retain() if current is not None else acquire_operation("session", session_id)
+            )
         for handle in self._registry.select(
             session_id=session_id,
             generation=generation,
@@ -1333,6 +1519,7 @@ class RuntimeSessionCoordinator:
                 continue
 
     def _refresh_session_state(self, record: _SessionRecord) -> None:
+        self._release_finished_operations()
         if self._sessions.get(record.session_id) is not record:
             return
         if record.state in {RuntimeSessionState.QUIESCING, RuntimeSessionState.CLOSED}:
