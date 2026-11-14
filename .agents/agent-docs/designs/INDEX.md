@@ -16,6 +16,8 @@ generated: true
 |---|
 | [agent-core/openjiuwen/agent_teams/harness](#module-agent-core-openjiuwen-agent_teams-harness) |
 | [agent-core/openjiuwen/core/context_engine](#module-agent-core-openjiuwen-core-context_engine) |
+| [agent-core/openjiuwen/core/session](#module-agent-core-openjiuwen-core-session) |
+| [agent-core/openjiuwen/harness](#module-agent-core-openjiuwen-harness) |
 | [agent_teams](#module-agent_teams) |
 | [agent_teams/workflow](#module-agent_teams-workflow) |
 | [docs](#module-docs) |
@@ -44,6 +46,12 @@ generated: true
 
 ## agent-core/openjiuwen/agent_teams/harness
 
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261112-0530-session-conversation-window](proposals/D-20261112-0530-session-conversation-window/design.md) | Session 共享主对话窗口 | draft | Yanqing-Shi | core | 2026-11-14 |
+
 ### 开发中 (active)
 
 | ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
@@ -54,11 +62,37 @@ generated: true
 
 ## agent-core/openjiuwen/core/context_engine
 
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261112-0530-session-conversation-window](proposals/D-20261112-0530-session-conversation-window/design.md) | Session 共享主对话窗口 | draft | Yanqing-Shi | core | 2026-11-14 |
+
 ### 开发中 (active)
 
 | ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
 |---|---|---|---|---|---|
 | [D-20261028-1704-agent-leader-context-handoff](active/D-20261028-1704-agent-leader-context-handoff/design.md) | 单智能体与团队 Leader 的最小上下文交接 | in-development | 待确认 | core | 2026-11-01 |
+
+<a id="module-agent-core-openjiuwen-core-session"></a>
+
+## agent-core/openjiuwen/core/session
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261112-0530-session-conversation-window](proposals/D-20261112-0530-session-conversation-window/design.md) | Session 共享主对话窗口 | draft | Yanqing-Shi | core | 2026-11-14 |
+
+<a id="module-agent-core-openjiuwen-harness"></a>
+
+## agent-core/openjiuwen/harness
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261112-0530-session-conversation-window](proposals/D-20261112-0530-session-conversation-window/design.md) | Session 共享主对话窗口 | draft | Yanqing-Shi | core | 2026-11-14 |
 
 <a id="module-agent_teams"></a>
 
@@ -107,6 +141,12 @@ generated: true
 <a id="module-jiuwenswarm-agents-harness-common"></a>
 
 ## jiuwenswarm/agents/harness/common
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261112-0530-session-conversation-window](proposals/D-20261112-0530-session-conversation-window/design.md) | Session 共享主对话窗口 | draft | Yanqing-Shi | core | 2026-11-14 |
 
 ### 开发中 (active)
 
@@ -219,6 +259,12 @@ generated: true
 
 ## jiuwenswarm/runtime
 
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261112-0530-session-conversation-window](proposals/D-20261112-0530-session-conversation-window/design.md) | Session 共享主对话窗口 | draft | Yanqing-Shi | core | 2026-11-14 |
+
 ### 开发中 (active)
 
 | ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
@@ -261,6 +307,12 @@ generated: true
 
 ## jiuwenswarm/server/runtime/agent_adapter
 
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261112-0530-session-conversation-window](proposals/D-20261112-0530-session-conversation-window/design.md) | Session 共享主对话窗口 | draft | Yanqing-Shi | core | 2026-11-14 |
+
 ### 开发中 (active)
 
 | ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
@@ -272,6 +324,12 @@ generated: true
 <a id="module-jiuwenswarm-server-runtime-session"></a>
 
 ## jiuwenswarm/server/runtime/session
+
+### 开发前 (proposals)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261112-0530-session-conversation-window](proposals/D-20261112-0530-session-conversation-window/design.md) | Session 共享主对话窗口 | draft | Yanqing-Shi | core | 2026-11-14 |
 
 ### 开发中 (active)
 

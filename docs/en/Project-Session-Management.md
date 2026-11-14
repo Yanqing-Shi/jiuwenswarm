@@ -17,9 +17,9 @@ A `mode.set` request switches the current execution mode within one Session ID; 
 
 ### Core Concepts
 
-Switching between a single agent and a team within the same `work` or `code` profile transfers the conversation to the actual Team Leader or single agent. This includes member results already received by the Leader, but not members' private conversations. Both normal and plan are supported; entering or leaving plan on the same executor preserves its context. A switch fails immediately while either executor has pending work, tools, or unanswered interactions. Retry after that work settles; switching does not automatically pause it. Switching between `work` and `code` profiles in a Session with an established conversation owner is rejected; it does not transfer context across profiles.
+A new Session keeps one main conversation, identified by its Session ID. The single agent and the actual Team Leader read and write that same conversation across `work`/`code` and normal/plan, so changing mode keeps the history, including member results the Leader has already received. Team members and subagents keep private conversations that are not shared. Compression done for the current model applies to the shared conversation for every later mode.
 
-This requires the matching Core conversation handoff APIs. `team.design` and external CLI runtimes are outside the scope. Unknown legacy ownership, missing snapshots, and nonportable file offloads cause explicit errors. Handoff recovery does not guarantee exactly-once tool effects when an already consumed request is retried after a process crash.
+Sessions created before this behaviour have no shared conversation and are not migrated: the single agent and the team keep separate contexts there. `team.design` and external CLI runtimes are outside the scope.
 
 | Concept | Description |
 |---------|-------------|
@@ -319,6 +319,8 @@ Toggles project pin state and compacts pin order.
 - `project.sessions.delete_archived`: `{project_id:string}`; permanently deletes only archived sessions in the project. Deletion is accepted immediately and cleaned up in the background.
 
 Both project session operations return `{project_id,succeeded_count,failed_count,results}`. Each result contains `session_id`, `ok`, and `code/error` on failure. An empty selection succeeds with zero counts. Default projects support these batch operations but cannot themselves be deleted.
+
+A chat run and a mode change share one Session operation lock. A running conversation keeps it while waiting for tools, interaction answers, background continuations and its final save, so a mode change in that time returns `SESSION_BUSY`; a chat sent while a mode change is in progress waits and then runs in the new mode. Stop, interaction answers and steering use the active run's control channel. Archive and delete do not take this lock and keep the behaviour described above.
 
 Background cleanup is bound to its `operation_id` and runtime generation: an old retry cannot take over a later archive or stop a new runtime generation started after restoration. Waiting for mailbox consumers to stop is limited to 10 seconds per attempt; a timeout releases the cleanup slot and schedules a retry. Consumers remain tracked until they exit, so retries cannot delete their data while they still run. If an archive stop timed out, the next turn after unarchive finishes draining the old runtime before registering a new generation.
 
