@@ -145,6 +145,9 @@ def _append(stored, request):
         stream.write(json.dumps(user(request.request_id, request.params["query"])) + "\n")
 
 
+_RUNTIMES: list = []
+
+
 def _runtime_with_history(h, monkeypatch):
     """Keep the real Runtime/Host/Core and production history writer together."""
     monkeypatch.setattr(h.facade, "_ensure_adapter", lambda **_kwargs: h.adapter)
@@ -166,7 +169,16 @@ def _runtime_with_history(h, monkeypatch):
 
     manager = FakeAgentManager()
     manager.agent = HostEntry()
-    return AgentRuntime(agent_manager=manager, initializer=AsyncMock(), plan_controller=FakePlanController())
+    # These tests restart inside one process. A Runtime waiting for a permission
+    # answer still owns its Session operation; the exit of its process ends that.
+    for earlier in _RUNTIMES:
+        leases = earlier._session_coordinator._operation_leases
+        for _handle, lease in leases.values():
+            lease.close()
+        leases.clear()
+    runtime = AgentRuntime(agent_manager=manager, initializer=AsyncMock(), plan_controller=FakePlanController())
+    _RUNTIMES[:] = [runtime]
+    return runtime
 
 
 async def _recorded_turn(runtime, request):
@@ -314,6 +326,11 @@ async def test_two_tool_batches_keep_consumption_through_real_runtime_and_restar
 
 async def test_legacy_bad_boundary_is_not_silently_healed(hosts, stored, snapshot_checkpoint, monkeypatch):
     from jiuwenswarm.server.runtime.agent_adapter.session_input import SessionInputGuard
+    from jiuwenswarm.runtime.session import conversation
+
+    # A shared conversation record restores the exact window and has no snapshot
+    # boundary to validate. This case covers a Session on the snapshot path.
+    monkeypatch.setattr(conversation, "initialize_main_conversation", AsyncMock(return_value=None))
     # Generate a minimal legacy fixture through Core, without the new producers.
     with monkeypatch.context() as legacy:
         legacy.setattr(SessionInputGuard, "_record_consumed_inputs", lambda *_args: None)
