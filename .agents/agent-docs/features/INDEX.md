@@ -105,6 +105,7 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
 | [F_20261104_1225_npc-team-member-sessions](F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](../designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
+| [F_20261113_0307_shared-conversation-runtime](F_20261113_0307_shared-conversation-runtime.md) | F | I-04 共享主窗口的 Runtime 与 adapter 装配 | Yanqing-Shi | [D-20261112-0530-session-conversation-window](../designs/proposals/D-20261112-0530-session-conversation-window/design.md) |
 
 <a id="module-jiuwenswarm-agents-harness-common-memory"></a>
 
@@ -152,6 +153,7 @@ generated: true
 |---|---|---|---|---|
 | [F_20261104_1225_npc-team-member-sessions](F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](../designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
 | [F_20261111_1755_team-leader-goal](F_20261111_1755_team-leader-goal.md) | F | 调度模式领导目标驱动设置实施与验证 | alan_cheng | [D-20261111-1722-team-goal-config](../designs/active/D-20261111-1722-team-goal-config/design.md) |
+| [F_20261112_0650_session-operation-ownership](F_20261112_0650_session-operation-ownership.md) | F | I-00 Session 操作锁与生命周期基础 | Yanqing-Shi | [D-20261112-0530-session-conversation-window](../designs/proposals/D-20261112-0530-session-conversation-window/design.md) |
 | [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 与 TUI 共用会话模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
 
 <a id="module-jiuwenswarm-agents-harness-team-rails"></a>
@@ -343,6 +345,8 @@ generated: true
 | [F_20261029_0001_agent-leader-context-handoff](F_20261029_0001_agent-leader-context-handoff.md) | F | 单智能体与 Leader 上下文交接实施记录 | 待确认 | [D-20261028-1704-agent-leader-context-handoff](../designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) |
 | [F_20261103_1501_app-role-session](app-role-session.md) | F | 保留基础系统提示的轻量 NPC 会话 | kdgmpw | [D-20261103-1444-app-role-session](../designs/active/D-20261103-1444-app-role-session/design.md) |
 | [F_20261104_1225_npc-team-member-sessions](F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](../designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
+| [F_20261112_0650_session-operation-ownership](F_20261112_0650_session-operation-ownership.md) | F | I-00 Session 操作锁与生命周期基础 | Yanqing-Shi | [D-20261112-0530-session-conversation-window](../designs/proposals/D-20261112-0530-session-conversation-window/design.md) |
+| [F_20261113_0307_shared-conversation-runtime](F_20261113_0307_shared-conversation-runtime.md) | F | I-04 共享主窗口的 Runtime 与 adapter 装配 | Yanqing-Shi | [D-20261112-0530-session-conversation-window](../designs/proposals/D-20261112-0530-session-conversation-window/design.md) |
 | [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 与 TUI 共用会话模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
 
 <a id="module-jiuwenswarm-server"></a>
@@ -399,6 +403,7 @@ generated: true
 | [F_20261104_1225_npc-team-member-sessions](F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](../designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
 | [F_20261110_1438_opencode-go-provider](F_20261110_1438_opencode-go-provider.md) | F | 新增 opencode-go 模型供应商 | wang_njust_608 | 无独立 D：需求与方案由本地 Spec Kit 资产 specs/001-opencode-go-provider/ 承载（spec/plan/tasks，仅本地保留、不入库），未另建 .agents/agent-docs 下的 D 编号；上游供应商预设归 agent-gateway 仓。 |
 | [F_20261111_1755_team-leader-goal](F_20261111_1755_team-leader-goal.md) | F | 调度模式领导目标驱动设置实施与验证 | alan_cheng | [D-20261111-1722-team-goal-config](../designs/active/D-20261111-1722-team-goal-config/design.md) |
+| [F_20261113_0307_shared-conversation-runtime](F_20261113_0307_shared-conversation-runtime.md) | F | I-04 共享主窗口的 Runtime 与 adapter 装配 | Yanqing-Shi | [D-20261112-0530-session-conversation-window](../designs/proposals/D-20261112-0530-session-conversation-window/design.md) |
 
 <a id="module-jiuwenswarm-server-runtime-session"></a>
 
@@ -408,6 +413,7 @@ generated: true
 |---|---|---|---|---|
 | [F_20261103_1501_app-role-session](app-role-session.md) | F | 保留基础系统提示的轻量 NPC 会话 | kdgmpw | [D-20261103-1444-app-role-session](../designs/active/D-20261103-1444-app-role-session/design.md) |
 | [F_20261104_1225_npc-team-member-sessions](F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](../designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
+| [F_20261112_0650_session-operation-ownership](F_20261112_0650_session-operation-ownership.md) | F | I-00 Session 操作锁与生命周期基础 | Yanqing-Shi | [D-20261112-0530-session-conversation-window](../designs/proposals/D-20261112-0530-session-conversation-window/design.md) |
 
 <a id="module-jiuwenswarm-server-runtime-skill"></a>
 

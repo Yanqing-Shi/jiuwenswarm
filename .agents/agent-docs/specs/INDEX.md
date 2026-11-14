@@ -39,6 +39,7 @@ generated: true
 | [jiuwenswarm/resources/agent/workspace/skills/workswarm-builtin](#module-jiuwenswarm-resources-agent-workspace-skills-workswarm-builtin) |
 | [jiuwenswarm/resources/plugins/ttse](#module-jiuwenswarm-resources-plugins-ttse) |
 | [jiuwenswarm/runtime](#module-jiuwenswarm-runtime) |
+| [jiuwenswarm/runtime/session](#module-jiuwenswarm-runtime-session) |
 | [jiuwenswarm/server/control](#module-jiuwenswarm-server-control) |
 | [jiuwenswarm/server/jiuwenmate](#module-jiuwenswarm-server-jiuwenmate) |
 | [jiuwenswarm/server/runtime](#module-jiuwenswarm-server-runtime) |
@@ -122,6 +123,7 @@ generated: true
 |---|---|---|---|---|
 | [S_01_team-goal-config](jiuwenswarm/agents/harness/team/S_01_team-goal-config.md) | S | Swarm 团队 Goal 配置契约 | alan_cheng | — |
 | [S_02_app-role-npc-team](jiuwenswarm/server/runtime/agent_adapter/S_02_app-role-npc-team.md) | S | app_role 的团队 NPC 与轻量咨询契约 | kdgmpw | — |
+| [S_02_session-operation-ownership](runtime/S_02_session-operation-ownership.md) | S | Session 运行与模式切换的操作互斥 | Yanqing-Shi | — |
 
 <a id="module-jiuwenswarm-agents-swarm"></a>
 
@@ -260,6 +262,14 @@ generated: true
 |---|---|---|---|---|
 | [S_01_agent-leader-context-handoff](runtime/S_01_agent-leader-context-handoff.md) | S | 同一 Session 的 Agent / Leader 对话归属 | 待确认 | — |
 | [S_02_app-role-npc-team](jiuwenswarm/server/runtime/agent_adapter/S_02_app-role-npc-team.md) | S | app_role 的团队 NPC 与轻量咨询契约 | kdgmpw | — |
+
+<a id="module-jiuwenswarm-runtime-session"></a>
+
+## jiuwenswarm/runtime/session
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [S_02_session-operation-ownership](runtime/S_02_session-operation-ownership.md) | S | Session 运行与模式切换的操作互斥 | Yanqing-Shi | — |
 
 <a id="module-jiuwenswarm-server-control"></a>
 
