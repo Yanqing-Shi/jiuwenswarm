@@ -9,7 +9,6 @@
 的 delta 拼接文本。
 """
 import asyncio
-from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -28,9 +27,6 @@ def _adapter_ready(monkeypatch: pytest.MonkeyPatch) -> JiuWenSwarmDeepAdapter:
         get_context_usage=lambda **_kwargs: {},
     )
     adapter._is_session_scoped_adapter = True  # pylint: disable=protected-access
-    # This fixture replaces the entire SDK interaction loop; ownership and
-    # checkpoint admission have their own integration coverage.
-    monkeypatch.setattr(adapter, "_conversation_request_admission", lambda _request: nullcontext())
     monkeypatch.setattr(adapter, "_has_valid_model_config", lambda _model_name="": True)
     monkeypatch.setattr(adapter, "_bind_runtime_cron_context", lambda **_kwargs: None)
     monkeypatch.setattr(adapter, "_reset_runtime_cron_context", lambda _tokens: None)
