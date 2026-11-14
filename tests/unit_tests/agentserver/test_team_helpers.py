@@ -57,6 +57,17 @@ def _record_unattended_team_history(monkeypatch):
     return recorded
 
 
+@pytest.fixture(autouse=True)
+def _isolate_conversation_handoff(monkeypatch):
+    """Transport fakes here do not start a Leader/child Session.
+
+    Actual admission and startup callbacks are covered by test_context_handoff.
+    """
+    from jiuwenswarm.runtime import context_handoff
+
+    monkeypatch.setattr(context_handoff, "team_conversation_request", lambda _: contextlib.nullcontext())
+
+
 def test_team_event_queue_is_bounded() -> None:
     queue = team_helpers._new_team_event_queue()
 

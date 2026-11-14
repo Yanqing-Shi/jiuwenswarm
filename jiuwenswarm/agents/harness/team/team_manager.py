@@ -1176,19 +1176,20 @@ class TeamManager:
                 f"{current.request_id}"
             )
         self._teammate_quota_notice_emitted.pop(session_id, None)
+        round_generation = generation or self._session_generations.get(session_id, 0)
         self._active_rounds[session_id] = _ActiveTeamRound(
             request_id=request_id,
-            generation=generation or self._session_generations.get(session_id, 0),
+            generation=round_generation,
             release_admission=release_admission,
             defer_terminal_release=defer_terminal_release,
             terminal_armed=terminal_armed,
         )
-        if self._round_state_reporter is not None:
-            self._round_state_reporter(
-                session_id,
-                self._active_rounds[session_id].generation,
-                True,
-            )
+        try:
+            if self._round_state_reporter is not None:
+                self._round_state_reporter(session_id, round_generation, True)
+        except BaseException:
+            self._active_rounds.pop(session_id, None)
+            raise
 
     async def finish_round(self, session_id: str) -> None:
         """Finish the current round on a runtime terminal event."""

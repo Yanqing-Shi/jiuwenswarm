@@ -287,6 +287,8 @@ generated: true
 
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
+| [B_20261029_1117_resident-worker-version-mismatch](runtime/B_20261029_1117_resident-worker-version-mismatch.md) | B | 常驻旧 Worker 导致 AgentServer runtime failed | 待确认 | [D-20261028-1704-agent-leader-context-handoff](../designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) |
+| [B_20261030_0330_canonical-work-mode-handoff](runtime/B_20261030_0330_canonical-work-mode-handoff.md) | B | 显式 work mode 被 TUI Session code profile 阻断交接 | 待确认 | [D-20261028-1704-agent-leader-context-handoff](../designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) |
 | [B_20261117_0452_team-attach-subscription-inflight](jiuwenswarm/server/B_20261117_0452_team-attach-subscription-inflight.md) | B | Team 旁听订阅被记为在途请求，导致会话一直忙碌、无法从 Team 切回 Agent | 待确认 | 无独立 D：修复既有忙碌判定对旁听订阅的误判，不改变 mode.set 与归档的契约，无独立设计。关联实施记录见 F_20261116_1710_web-session-mode-switch。 |
 | [B_20261120_0927_unknown-answer-source-hang](jiuwenswarm/runtime/B_20261120_0927_unknown-answer-source-hang.md) | B | 未知 source 的 answers 请求在团队会话中排队死锁、无终止帧 | openjiuwen_ai | 无独立 D：仅收紧既有 chat.send answers 校验的适用条件，不改变交互恢复协议、source 白名单与会话 lane 语义；无独立设计。 |
 
@@ -332,6 +334,8 @@ generated: true
 
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
+| [B_20261029_1117_resident-worker-version-mismatch](runtime/B_20261029_1117_resident-worker-version-mismatch.md) | B | 常驻旧 Worker 导致 AgentServer runtime failed | 待确认 | [D-20261028-1704-agent-leader-context-handoff](../designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) |
+| [B_20261030_0330_canonical-work-mode-handoff](runtime/B_20261030_0330_canonical-work-mode-handoff.md) | B | 显式 work mode 被 TUI Session code profile 阻断交接 | 待确认 | [D-20261028-1704-agent-leader-context-handoff](../designs/active/D-20261028-1704-agent-leader-context-handoff/design.md) |
 | [B_20261031_0946_ttse-codecheck-boundaries](jiuwenswarm/B_20261031_0946_ttse-codecheck-boundaries.md) | B | TTSE 相关 CodeCheck 受保护访问与关闭条件复杂度修复 | xinyang_bali | 无独立 D：按用户提供的 20 项 CodeCheck 清单修复实现边界，沿用当前 TTSE 通用运行契约，无独立 D。 |
 | [B_20261031_1042_pr9317-review](jiuwenswarm/server/B_20261031_1042_pr9317-review.md) | B | PR 9317 插件模式校验与 Front 遗留启动链清理 | xinyang_bali | 无独立 D：根据 openJiuwen-bot 检视意见清理现有实现，不引入新接口或架构方案，无独立 D。 |
 | [B_20261031_1053_atomgit-review](jiuwenswarm/server/B_20261031_1053_atomgit-review.md) | B | PR 9317 AtomGit 取消、补丁兼容与注销恢复修复 | xinyang_bali | 无独立 D：根据机器人检视修复现有资源生命周期和可选补丁边界，不引入独立方案。 |

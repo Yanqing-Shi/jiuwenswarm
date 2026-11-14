@@ -16913,10 +16913,21 @@ class JiuWenSwarmDeepAdapter:
             get_kv_cache_runtime,
         )
 
+        from jiuwenswarm.runtime.session.conversation import initialize_main_conversation, load_main_binding
+        from jiuwenswarm.server.runtime.session.session_metadata import get_session_metadata
+        from openjiuwen.core.session.checkpointer import CheckpointerFactory
+
+        binding = await load_main_binding(session_id)
+        checkpointer = CheckpointerFactory.get_checkpointer()
+        # An adapter driven without the Runtime is the creation boundary of a Session nobody created yet.
+        if binding is None and not get_session_metadata(session_id, cache_bust=True, enable_writeback=False):
+            binding = await initialize_main_conversation(session_id)
+        session_options = {"conversation_binding": binding, "checkpointer": checkpointer} if binding is not None else {}
         session = create_agent_session(
             session_id=session_id,
             card=getattr(self._instance, "card", None),
             kv_cache_runtime=get_kv_cache_runtime(),
+            **session_options,
         )
         await session.pre_run(inputs={})
         await self.install_session_input_guard()
@@ -20829,8 +20840,30 @@ class JiuWenSwarmDeepAdapter:
         """Bind trusted host identity and command execution for one request."""
         from jiuwenswarm.server.runtime.plugin_package_lifecycle import use_plugins
 
-        with use_plugins(self._plugin_turn_packages(request)):
-            return await self._process_message_with_plugin_reservation(request, inputs)
+        async with self._conversation_request_admission(request):
+            with use_plugins(self._plugin_turn_packages(request)):
+                return await self._process_message_with_plugin_reservation(request, inputs)
+
+    @asynccontextmanager
+    async def _conversation_request_admission(self, request: AgentRequest):
+        if not getattr(self, "_is_session_scoped_adapter", False) or getattr(self, "_external_harness_binding", None):
+            yield
+            return
+        from jiuwenswarm.agents.harness.common.session_ops_service import resolve_live_agent_session
+        from openjiuwen.core.context_engine import ConversationBinding
+
+        session = resolve_live_agent_session(self._instance, request.session_id)
+        get_binding = getattr(session, "get_conversation_binding", None)
+        if (callable(get_binding) and isinstance(get_binding(), ConversationBinding)
+                and self._is_interrupt_resume_dispatch(request.params or {})):
+            from openjiuwen.core.single_agent.interrupt.state import INTERRUPTION_KEY
+
+            # Validate storage before the permission queue reserves its
+            # head answer; a failed refresh must leave that answer pending.
+            await self._instance.react_agent.context_engine.create_context(
+                session=session, allow_pending_tool_calls=session.get_state(INTERRUPTION_KEY) is not None,
+            )
+        yield
 
     async def _process_message_with_plugin_reservation(
         self, request: AgentRequest, inputs: dict[str, Any]
@@ -21670,10 +21703,11 @@ class JiuWenSwarmDeepAdapter:
         from jiuwenswarm.server.runtime.plugin_package_lifecycle import use_plugins
 
         stream = self._process_stream_with_plugin_reservation(request, inputs)
-        with use_plugins(self._plugin_turn_packages(request), on_owner_done=stream.aclose):
-            async with aclosing(stream):
-                async for chunk in stream:
-                    yield chunk
+        async with self._conversation_request_admission(request):
+            with use_plugins(self._plugin_turn_packages(request), on_owner_done=stream.aclose):
+                async with aclosing(stream):
+                    async for chunk in stream:
+                        yield chunk
 
     def _plugin_turn_packages(self, request: AgentRequest) -> list[str]:
         """Include saved selections before a root adapter delegates the turn."""
