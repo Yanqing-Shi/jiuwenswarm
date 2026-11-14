@@ -258,6 +258,7 @@ generated: true
 
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
+| [S_01_agent-leader-context-handoff](runtime/S_01_agent-leader-context-handoff.md) | S | 同一 Session 的 Agent / Leader 对话归属 | 待确认 | — |
 | [S_02_app-role-npc-team](jiuwenswarm/server/runtime/agent_adapter/S_02_app-role-npc-team.md) | S | app_role 的团队 NPC 与轻量咨询契约 | kdgmpw | — |
 
 <a id="module-jiuwenswarm-server-control"></a>
@@ -293,6 +294,7 @@ generated: true
 
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
+| [S_01_agent-leader-context-handoff](runtime/S_01_agent-leader-context-handoff.md) | S | 同一 Session 的 Agent / Leader 对话归属 | 待确认 | — |
 | [S_01_app-agent-interaction](mcpApps/S_01_app-agent-interaction.md) | S | MCP App 到 Agent 交互规约 | LI Jinyang | — |
 | [S_01_team-goal-config](jiuwenswarm/agents/harness/team/S_01_team-goal-config.md) | S | Swarm 团队 Goal 配置契约 | alan_cheng | — |
 | [S_01_tool-discovery-language](jiuwenswarm/agents/harness/common/tools/S_01_tool-discovery-language.md) | S | 渐进式工具发现语言与原始执行契约 | MengHan18 | — |

@@ -14,6 +14,8 @@ generated: true
 
 | 模块 |
 |---|
+| [agent-core/openjiuwen/agent_teams/harness](#module-agent-core-openjiuwen-agent_teams-harness) |
+| [agent-core/openjiuwen/core/context_engine](#module-agent-core-openjiuwen-core-context_engine) |
 | [agent_teams](#module-agent_teams) |
 | [agent_teams/workflow](#module-agent_teams-workflow) |
 | [docs](#module-docs) |
@@ -37,6 +39,26 @@ generated: true
 | [jiuwenswarm/server/runtime/session](#module-jiuwenswarm-server-runtime-session) |
 | [jiuwenswarm/server/runtime/skill](#module-jiuwenswarm-server-runtime-skill) |
 | [openjiuwen/agent_teams](#module-openjiuwen-agent_teams) |
+
+<a id="module-agent-core-openjiuwen-agent_teams-harness"></a>
+
+## agent-core/openjiuwen/agent_teams/harness
+
+### 开发中 (active)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261028-1704-agent-leader-context-handoff](active/D-20261028-1704-agent-leader-context-handoff/design.md) | 单智能体与团队 Leader 的最小上下文交接 | in-development | 待确认 | core | 2026-11-01 |
+
+<a id="module-agent-core-openjiuwen-core-context_engine"></a>
+
+## agent-core/openjiuwen/core/context_engine
+
+### 开发中 (active)
+
+| ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
+|---|---|---|---|---|---|
+| [D-20261028-1704-agent-leader-context-handoff](active/D-20261028-1704-agent-leader-context-handoff/design.md) | 单智能体与团队 Leader 的最小上下文交接 | in-development | 待确认 | core | 2026-11-01 |
 
 <a id="module-agent_teams"></a>
 
@@ -201,6 +223,7 @@ generated: true
 
 | ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
 |---|---|---|---|---|---|
+| [D-20261028-1704-agent-leader-context-handoff](active/D-20261028-1704-agent-leader-context-handoff/design.md) | 单智能体与团队 Leader 的最小上下文交接 | in-development | 待确认 | core | 2026-11-01 |
 | [D-20261103-1444-app-role-session](active/D-20261103-1444-app-role-session/design.md) | 应用角色会话的最小提示词运行配置 | in-development | kdgmpw | harness | 2026-11-03 |
 | [D-20261104-1141-npc-team-member-sessions](active/D-20261104-1141-npc-team-member-sessions/design.md) | NPC 主从会话与按需搜索工具 | in-development | kdgmpw | harness | 2026-11-04 |
 
@@ -242,6 +265,7 @@ generated: true
 
 | ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
 |---|---|---|---|---|---|
+| [D-20261028-1704-agent-leader-context-handoff](active/D-20261028-1704-agent-leader-context-handoff/design.md) | 单智能体与团队 Leader 的最小上下文交接 | in-development | 待确认 | core | 2026-11-01 |
 | [D-20261103-1444-app-role-session](active/D-20261103-1444-app-role-session/design.md) | 应用角色会话的最小提示词运行配置 | in-development | kdgmpw | harness | 2026-11-03 |
 | [D-20261104-1141-npc-team-member-sessions](active/D-20261104-1141-npc-team-member-sessions/design.md) | NPC 主从会话与按需搜索工具 | in-development | kdgmpw | harness | 2026-11-04 |
 
@@ -274,7 +298,3 @@ generated: true
 | ID | 标题 | 状态 | 作者 | 领域 | 更新日期 |
 |---|---|---|---|---|---|
 | [D-20261111-1722-team-goal-config](active/D-20261111-1722-team-goal-config/design.md) | Swarm 团队 Goal 配置接入方案 | in-development | alan_cheng | harness | 2026-11-11 |
-
-## ⚠ 无法解析（已跳过，请运行 validate 修复）
-
-- `active/D-20261116-1201-colleague-swarmchat-membership/design.md` — 文件夹缺少 design.md

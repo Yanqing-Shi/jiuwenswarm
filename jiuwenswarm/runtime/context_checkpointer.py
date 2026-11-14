@@ -13,6 +13,7 @@ import weakref
 
 from openjiuwen.core.session.checkpointer.base import Checkpointer
 from openjiuwen.core.session.agent import Session as NativeSession
+from openjiuwen.core.context_engine.schema.conversation import SessionConversationStore
 
 OWNER_KEY = "jiuwenswarm_context_checkpoint_owner_v1"
 _prepared = ContextVar("swarm_prepared_context_checkpoint", default=None)
@@ -108,6 +109,10 @@ class ContextCheckpointer(Checkpointer):
     def __getattr__(self, name: str) -> Any:
         # Preserve the existing runtime's storage shutdown/disposal lookup.
         return getattr(self.delegate, name)
+
+    def conversation_store(self) -> SessionConversationStore:
+        """Preserve the provider-owned shared conversation through this wrapper."""
+        return self.delegate.conversation_store()
 
     async def _commit(self, native_session: Any, *, interrupted: bool) -> Any:
         from jiuwenswarm.runtime.checkpoint_budget import admit_context_checkpoint
