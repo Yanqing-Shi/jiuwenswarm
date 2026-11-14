@@ -1511,6 +1511,7 @@ async def test_single_agent_pause_keeps_stream_execution_alive(
     """issue #6163: 单 Agent pause 只挂起 ReAct 循环，不取消协调器执行。"""
     cancel_execution = AsyncMock()
     coordinator = SimpleNamespace(
+        set_operation_admission=MagicMock(),
         snapshot_session=lambda session_id: SimpleNamespace(
             session_id=session_id,
             generation=2,
@@ -1559,6 +1560,7 @@ async def test_single_agent_cancel_still_cancels_coordinator_execution(
         return_value=CancelExecutionResult(matched=1, cancelled=1, timed_out=())
     )
     coordinator = SimpleNamespace(
+        set_operation_admission=MagicMock(),
         snapshot_session=lambda session_id: SimpleNamespace(
             session_id=session_id,
             generation=2,
@@ -1649,6 +1651,7 @@ async def test_team_pause_publishes_once_after_business_consumers_exit(
         order.append("push")
 
     coordinator = SimpleNamespace(
+        set_operation_admission=MagicMock(),
         snapshot_session=lambda session_id: (
             SimpleNamespace(
                 session_id=session_id,
@@ -1723,6 +1726,7 @@ async def test_team_pause_does_not_push_completion_to_replaced_session(
 
     # Return independent snapshots so replacement cannot mutate the captured generation.
     coordinator = SimpleNamespace(
+        set_operation_admission=MagicMock(),
         snapshot_session=lambda session_id: SimpleNamespace(**vars(snapshot)),
         cancel_execution=AsyncMock(return_value=CancelExecutionResult(matched=0, cancelled=0, timed_out=())),
     )

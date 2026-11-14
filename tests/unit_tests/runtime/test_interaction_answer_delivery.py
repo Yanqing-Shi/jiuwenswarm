@@ -226,14 +226,18 @@ async def test_a_new_user_turn_keeps_the_question_a_paused_goal_still_waits_on()
     ), trigger_hook=False))
     assert admission.has_pending_interaction(session_id)
 
-    await asyncio.wait_for(_collect_events(runtime.stream(AgentRequest(
+    next_turn = asyncio.create_task(_collect_events(runtime.stream(AgentRequest(
         request_id="turn-2", channel_id="web", session_id=session_id, req_method=ReqMethod.CHAT_SEND,
         is_stream=True, params={"query": "something else", "mode": "agent", "work_mode": "work"},
-    ), trigger_hook=False)), 5)
+    ), trigger_hook=False)))
 
+    await asyncio.sleep(0.02)
+    assert not next_turn.done()
     assert admission.has_pending_interaction(session_id)
     await asyncio.wait_for(_streamed_answer(runtime, session_id), 5)  # the goal still waited for it
+    await asyncio.wait_for(next_turn, 5)
     assert not admission.has_pending_interaction(session_id)
+    await runtime.close()
 
 
 class _TwoQuestionAgent(FakeAgent):
