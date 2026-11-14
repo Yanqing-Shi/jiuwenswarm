@@ -44,3 +44,8 @@ Leader 模型输入只有原 Leader 历史和提问 `What is C`，没有该赋�
 没有 owner 的旧 Session 会先经过 `_check_legacy_owner`，可能拒绝来源不明的
 跨执行者切换，或以最后一个执行者建立归属；这两种情况都不会自动合并先前分叉的
 Agent 与 Leader checkpoint。
+
+
+## 2026-11-13：对应实现已移除
+
+本记录涉及的复制式 handoff 未进入 develop，已按 D-20261112-0530-session-conversation-window 的用户决定移除，见 F_20261113_0307_shared-conversation-runtime 的同日记录。上文保留为当时的依据，不再描述当前行为。
