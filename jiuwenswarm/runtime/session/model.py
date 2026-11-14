@@ -50,6 +50,18 @@ class SessionExecutionEndedError(RuntimeError):
     """
 
 
+class SessionRouteChangedError(RuntimeError):
+    """The Session mode read under execution ownership needs a different run type.
+
+    Raised before the run starts or produces output; the host dispatches the
+    request again from the committed mode, which this error carries.
+    """
+
+    def __init__(self, mode: str | None) -> None:
+        self.mode = mode
+        super().__init__("session mode changed before this request started; dispatching it again")
+
+
 class SessionCloseTimeoutError(RuntimeError):
     """A Session still owns tasks and cannot release its runtime resources."""
 

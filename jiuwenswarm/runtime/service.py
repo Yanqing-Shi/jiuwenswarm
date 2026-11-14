@@ -48,6 +48,7 @@ from jiuwenswarm.runtime.session.model import (
     SessionExecutionSnapshot,
     SessionExecutionState,
     SessionLifecycleContext,
+    SessionRouteChangedError,
     TeamExecutionContext,
     TeamExecutionDetails,
     TeamWaiterKind,
@@ -134,6 +135,13 @@ _SessionProvisionResultT = TypeVar(
     bound=SessionProvisionResult,
 )
 
+# Sentinel for "no mode switch seen yet" while a request waits for its Session.
+_NO_ROUTE_CHANGE = object()
+_TEAM_WORK_KINDS = frozenset({
+    SessionWorkKind.TEAM_REQUEST,
+    SessionWorkKind.TEAM_CONTROL,
+    SessionWorkKind.TEAM_BACKGROUND,
+})
 _PROCESS_RUNTIME_DEPENDENCY_LOCK = asyncio.Lock()
 _PROCESS_RUNTIME_DEPENDENCY_USERS = 0
 _PROCESS_RUNTIME_EXTENSION_LOCK = asyncio.Lock()
@@ -420,6 +428,7 @@ class AgentRuntime:
         self._resource_lease = resource_lease
         self._team_execution_controller = team_execution_controller
         self._session_coordinator = session_coordinator or RuntimeSessionCoordinator()
+        self._session_coordinator.set_operation_admission(self._admit_session_operation)
         self._session_runtime_lifecycle = session_runtime_lifecycle
         # Covers chat admission and preparation before the Team adapter creates
         # its own in-flight marker (including first-run Team construction).
@@ -948,6 +957,10 @@ class AgentRuntime:
             channel_id=channel_id,
             session_id=requested or None,
         )
+        if not requested or descriptor is None:
+            from jiuwenswarm.runtime.session.conversation import initialize_main_conversation
+
+            await initialize_main_conversation(resolved_session_id)
         await self._register_session(
             session_id=resolved_session_id,
             channel_id=channel_id,
@@ -1314,6 +1327,19 @@ class AgentRuntime:
         """Resolve session semantics and return this Runtime's selected agent."""
         self._require_started()
         from jiuwenswarm.runtime.request import prepare_chat_turn
+
+        from jiuwenswarm.runtime.session.conversation import initialize_main_conversation
+        from jiuwenswarm.server.runtime.session.session_metadata import get_session_metadata
+
+        params = request.params or {}
+        query = params.get("query")
+        # A chat on a Session nobody created yet is that Session's creation boundary.
+        if (sync_metadata and request.req_method in self._chat_turn_methods()
+                and request.session_id
+                and not params.get(TEAM_ATTACH_ONLY_PARAM)
+                and not (isinstance(query, str) and query.lstrip().startswith("/"))
+                and not get_session_metadata(request.session_id, cache_bust=True, enable_writeback=False)):
+            await initialize_main_conversation(request.session_id, mode=params.get("mode"))
 
         prepare_kwargs: dict[str, Any] = {"sync_metadata": sync_metadata}
         if agent_execution is not None:
@@ -1750,6 +1776,32 @@ class AgentRuntime:
     ) -> list[RuntimeEvent]:
         """Execute one non-streaming request and return Runtime events."""
         await self.start()
+        committed_mode: object = _NO_ROUTE_CHANGE
+        while True:
+            try:
+                return await self._invoke_routed(
+                    request,
+                    trigger_hook=trigger_hook,
+                    on_control_event=on_control_event,
+                    _agent_execution=_agent_execution,
+                )
+            except SessionRouteChangedError as exc:
+                # A mode switch finished while this request waited for the
+                # Session. Nothing has run yet: the request stays queued and
+                # is classified again. The same mode twice is not a switch.
+                if exc.mode == committed_mode:
+                    raise
+                committed_mode = exc.mode
+
+    async def _invoke_routed(
+        self,
+        request: AgentRequest,
+        *,
+        trigger_hook: bool,
+        on_control_event: Callable[[RuntimeEvent], Awaitable[None]] | None,
+        _agent_execution: RuntimeAgentExecution | None,
+    ) -> list[RuntimeEvent]:
+        """Classify the request from the current mode and run it once."""
         request = await self._normalize_tui_chat_after_claim(request)
         attachment_completion = self._non_team_attachment_completion(request)
         if attachment_completion is not None:
@@ -1825,6 +1877,7 @@ class AgentRuntime:
                         ),
                         interaction_ids=asked_interaction_ids,
                         team=team_details,
+                        on_owned=lambda: self._require_current_route(request, work_kind),
                     )
                 return await self._invoke_started(
                     request,
@@ -1850,6 +1903,7 @@ class AgentRuntime:
     ) -> list[RuntimeEvent]:
         from jiuwenswarm.runtime.events import RuntimeEvent
 
+        request = self.normalize_request(request)
         manager = await self._get_request_manager(request)
         if trigger_hook:
             await self._trigger_before_chat_request_hook(request)
@@ -2262,17 +2316,30 @@ class AgentRuntime:
         await self.start()
 
         async with self._tenant.scoped_manager(request) as manager:
-            async with aclosing(self._stream_under_tenant(
-                request,
-                manager=manager,
-                trigger_hook=trigger_hook,
-                on_control_event=on_control_event,
-                background=background,
-                on_agent_ready=on_agent_ready,
-                _agent_execution=_agent_execution,
-            )) as events:
-                async for event in events:
-                    yield event
+            committed_mode: object = _NO_ROUTE_CHANGE
+            while True:
+                produced = False
+                try:
+                    async with aclosing(self._stream_under_tenant(
+                        request,
+                        manager=manager,
+                        trigger_hook=trigger_hook,
+                        on_control_event=on_control_event,
+                        background=background,
+                        on_agent_ready=on_agent_ready,
+                        _agent_execution=_agent_execution,
+                    )) as events:
+                        async for event in events:
+                            produced = True
+                            yield event
+                    return
+                except SessionRouteChangedError as exc:
+                    # A mode switch finished while this request waited for the
+                    # Session. It stays queued and is classified again, unless
+                    # output already left or the mode did not actually change.
+                    if produced or exc.mode == committed_mode:
+                        raise
+                    committed_mode = exc.mode
 
     async def _stream_under_tenant(
         self,
@@ -2477,6 +2544,7 @@ class AgentRuntime:
                         details=details,
                         interaction_ids=interaction_ids,
                         channel_id=request.channel_id or "default",
+                        on_owned=lambda: self._require_current_route(request, work_kind),
                     )
                 else:
                     def operation() -> AsyncIterator[RuntimeEvent]:
@@ -2496,6 +2564,7 @@ class AgentRuntime:
                         operation,
                         interaction_ids=interaction_ids,
                         channel_id=request.channel_id or "default",
+                        on_owned=lambda: self._require_current_route(request, work_kind),
                     )
         else:
             stream = self._stream_started(
@@ -2573,6 +2642,7 @@ class AgentRuntime:
     ) -> AsyncIterator[RuntimeEvent]:
         from jiuwenswarm.runtime.events import RuntimeEvent
 
+        request = self.normalize_request(request)
         manager = await self._get_request_manager(request)
         if trigger_hook:
             await self._trigger_before_chat_request_hook(request)
@@ -3230,6 +3300,22 @@ class AgentRuntime:
         if not requests:
             self._pending_chat_requests.pop(session_id, None)
 
+    async def _admit_session_operation(
+        self, session_id: str, work_kind: SessionWorkKind,
+    ) -> Callable[[], Awaitable[None]] | None:
+        """Allow interactive preemption before waiting for execution ownership."""
+        controller = self._admission_controller
+        if controller is None or work_kind not in {
+            SessionWorkKind.CHAT_UNARY, SessionWorkKind.CHAT_STREAM,
+        }:
+            return None
+        await controller.begin_user(session_id)
+
+        async def release() -> None:
+            await controller.end_user(session_id)
+
+        return release
+
     def switch_session_mode(
         self,
         *,
@@ -3238,6 +3324,36 @@ class AgentRuntime:
         expected_mode: str | None,
         channel_id: str,
         user_id: str,
+    ) -> dict[str, Any]:
+        """Commit a mode change under the Session's shared operation lock."""
+        from jiuwenswarm.runtime.session.operation_lock import (
+            acquire_operation,
+            SessionOperationBusyError,
+        )
+
+        try:
+            lease = acquire_operation("session", session_id)
+        except SessionOperationBusyError as exc:
+            raise SessionModeSwitchError("session is busy", code="SESSION_BUSY") from exc
+        with lease:
+            return self._switch_session_mode_locked(
+                session_id=session_id,
+                target_mode=target_mode,
+                expected_mode=expected_mode,
+                channel_id=channel_id,
+                user_id=user_id,
+                busy_at_acquisition=self._session_mode_switch_busy(session_id),
+            )
+
+    def _switch_session_mode_locked(
+        self,
+        *,
+        session_id: str,
+        target_mode: str,
+        expected_mode: str | None,
+        channel_id: str,
+        user_id: str,
+        busy_at_acquisition: bool,
     ) -> dict[str, Any]:
         """Synchronously commit a TUI route while retaining project ownership."""
         from jiuwenswarm.server.runtime.session.session_history import (
@@ -3264,7 +3380,10 @@ class AgentRuntime:
         if stored_user_id and stored_user_id != user_id:
             raise SessionModeSwitchError("session not found", code="NOT_FOUND")
         already_current = normalize_tui_session_mode(metadata.get("mode")) == target_mode
-        if not already_current and self._session_mode_switch_busy(session_id):
+        # A run that arrived before this switch keeps the mode it was sent in,
+        # even if it has not started yet: the switch is refused. Runs arriving
+        # after ownership was taken wait for the new mode and cannot veto it.
+        if not already_current and busy_at_acquisition:
             raise SessionModeSwitchError("session is busy", code="SESSION_BUSY")
         try:
             previous_mode, written, changed = compare_and_set_session_mode(
@@ -3323,6 +3442,7 @@ class AgentRuntime:
         }
 
     def _session_mode_switch_busy(self, session_id: str) -> bool:
+        """Whether a run arrived, is queued, or is active for this Session."""
         pending = self._pending_chat_requests.get(session_id)
         if pending and not self.has_parked_team_streams(session_id):
             return True
@@ -4052,6 +4172,17 @@ class AgentRuntime:
             work_mode=work_mode,
         )
         return is_team_mode(canonical)
+
+    def _require_current_route(self, request: AgentRequest, work_kind: SessionWorkKind) -> None:
+        """Confirm, while owning the Session, the run type selected before it.
+
+        The mode cannot change once the Session operation is owned. A request
+        classified as single-agent or Team work before that point is
+        dispatched again if the committed mode now needs the other type.
+        """
+        current = self.normalize_request(request)
+        if self._request_targets_team(current) != (work_kind in _TEAM_WORK_KINDS):
+            raise SessionRouteChangedError((current.params or {}).get("mode"))
 
     @staticmethod
     def normalize_request(request: AgentRequest) -> AgentRequest:

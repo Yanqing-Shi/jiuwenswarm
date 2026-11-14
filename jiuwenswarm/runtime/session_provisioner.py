@@ -903,6 +903,9 @@ class RuntimeSessionProvisioner:
                     channel_metadata=channel_metadata,
                     client_app=provision_input.client_app,
                 )
+                from jiuwenswarm.runtime.session.conversation import initialize_main_conversation
+
+                await initialize_main_conversation(session_id, mode=canonical_mode)
                 if not explicit_tui_session:
                     self._agent_manager.activate_session_prewarm(session_id)
 

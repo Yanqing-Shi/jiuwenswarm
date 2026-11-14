@@ -11,7 +11,7 @@ import os
 import re
 import time
 from collections.abc import Awaitable, Callable
-from contextlib import AsyncExitStack, aclosing
+from contextlib import AsyncExitStack, aclosing, nullcontext
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -3392,9 +3392,6 @@ async def _start_team_stream_round(
         stream_task = asyncio.create_task(stream)
     finally:
         _TEAM_STREAM_REQUEST.reset(request_token)
-    from jiuwenswarm.runtime.context_handoff import retain_team_handoff
-
-    retain_team_handoff(stream_task)
     _register_team_stream_task(
         team_manager,
         session_id,
@@ -3447,37 +3444,43 @@ async def _process_team_message_stream_with_design(
     """
     design_bindings = await _bind_design_round_if_needed(request)
     try:
-        from jiuwenswarm.runtime.context_handoff import bind_team_handoff, team_conversation_request
+        from jiuwenswarm.runtime.session.conversation import load_main_binding, prepare_shared_leader, supports_shared_mode
+        from openjiuwen.agent_teams.harness import bind_leader_preparation
+        from jiuwenswarm.runtime.session.model import TEAM_ATTACH_ONLY_PARAM
 
-        async with team_conversation_request(request) as attempt:
-            async with aclosing(_process_team_message_stream_locked(
-                request, inputs, deep_agent
-            )) as stream:
-                while True:
-                    with bind_team_handoff(attempt):
-                        try:
-                            chunk = await anext(stream)
-                        except StopAsyncIteration:
-                            break
-                    if design_bindings is not None:
-                        _push_design_tool_activity(request, chunk)
-                    if isinstance(chunk.payload, dict) and chunk.payload.get("event_type") == "chat.processing_status":
-                        is_terminal_status = (
-                            chunk.payload.get("is_processing") is False
-                            and chunk.payload.get("is_complete") is True
-                        )
-                        logger.log(
-                            logging.INFO if is_terminal_status else logging.DEBUG,
-                            "[TeamProcessingStatus] handoff_to_adapter: session_id=%s request_id=%s "
-                            "channel_id=%s round_id=%s is_processing=%s is_complete=%s",
-                            request.session_id,
-                            chunk.request_id,
-                            chunk.channel_id,
-                            chunk.payload.get("rid"),
-                            chunk.payload.get("is_processing"),
-                            chunk.payload.get("is_complete"),
-                        )
-                    yield chunk
+        shared = (await load_main_binding(request.session_id)
+                  if supports_shared_mode(request.params.get("mode"))
+                  and not request.params.get(TEAM_ATTACH_ONLY_PARAM) else None)
+        async with aclosing(_process_team_message_stream_locked(
+            request, inputs, deep_agent
+        )) as stream:
+            while True:
+                preparation = (bind_leader_preparation(prepare_shared_leader)
+                               if shared is not None else nullcontext())
+                with preparation:
+                    try:
+                        chunk = await anext(stream)
+                    except StopAsyncIteration:
+                        break
+                if design_bindings is not None:
+                    _push_design_tool_activity(request, chunk)
+                if isinstance(chunk.payload, dict) and chunk.payload.get("event_type") == "chat.processing_status":
+                    is_terminal_status = (
+                        chunk.payload.get("is_processing") is False
+                        and chunk.payload.get("is_complete") is True
+                    )
+                    logger.log(
+                        logging.INFO if is_terminal_status else logging.DEBUG,
+                        "[TeamProcessingStatus] handoff_to_adapter: session_id=%s request_id=%s "
+                        "channel_id=%s round_id=%s is_processing=%s is_complete=%s",
+                        request.session_id,
+                        chunk.request_id,
+                        chunk.channel_id,
+                        chunk.payload.get("rid"),
+                        chunk.payload.get("is_processing"),
+                        chunk.payload.get("is_complete"),
+                    )
+                yield chunk
     finally:
         if design_bindings is not None:
             design_bindings.cleanup()
@@ -3673,9 +3676,6 @@ async def _process_team_message_stream(
     )
     has_execution_context = isinstance(execution_context, TeamExecutionContext)
     run_context = _team_input_run_context(request) if has_execution_context else None
-    from jiuwenswarm.runtime.context_handoff import team_handoff_run_context
-
-    run_context = team_handoff_run_context(run_context)
 
     # Attach-only subscription: entering a running Team Session observes the
     # live stream without submitting input. It must short-circuit before the
@@ -5384,9 +5384,19 @@ async def _consume_stream_with_query(
             get_kv_cache_runtime,
         )
 
+        from jiuwenswarm.runtime.session.conversation import load_main_binding, supports_shared_mode
+        from openjiuwen.core.session.checkpointer import CheckpointerFactory
+        from jiuwenswarm.server.runtime.session.session_metadata import get_session_metadata
+
+        metadata = get_session_metadata(session_id, cache_bust=True, enable_writeback=False)
+        binding = await load_main_binding(session_id) if supports_shared_mode(metadata.get("mode")) else None
+        session_options = ({"conversation_binding": binding, "checkpointer": CheckpointerFactory.get_checkpointer(),
+                            "team_id": team_spec.team_name}
+                           if binding is not None else {})
         team_session = create_agent_team_session(
             session_id=session_id,
             kv_cache_runtime=get_kv_cache_runtime(),
+            **session_options,
         )
         # Interrupt-resume wait state: the no-input runtime stream is driven
         # with a frame budget and an overall budget until the team.recovered
@@ -5907,15 +5917,11 @@ async def _consume_stream_with_query(
             exc,
             exc_info=True,
         )
-        from jiuwenswarm.runtime.context_handoff import ContextHandoffError
-
-        error_payload = exc.payload() if isinstance(exc, ContextHandoffError) else {
-            "event_type": "chat.error", "error": str(exc),
-        }
         try:
             await _deliver(
                 {
-                    **error_payload,
+                    "event_type": "chat.error",
+                    "error": str(exc),
                     "session_id": session_id,
                 },
             )

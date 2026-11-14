@@ -4609,7 +4609,6 @@ class JiuWenSwarmDeepAdapter:
                         deep_agent=getattr(adapter, "_instance", None),
                         session_id=sid,
                         history_before_request_id=history_before_request_id,
-                        handoff_profile="code" if getattr(self, "_is_code_agent", False) else "work",
                         **(
                             {"history_snapshot": history_snapshot}
                             if history_snapshot is not None
@@ -15387,10 +15386,21 @@ class JiuWenSwarmDeepAdapter:
             get_kv_cache_runtime,
         )
 
+        from jiuwenswarm.runtime.session.conversation import initialize_main_conversation, load_main_binding
+        from jiuwenswarm.server.runtime.session.session_metadata import get_session_metadata
+        from openjiuwen.core.session.checkpointer import CheckpointerFactory
+
+        binding = await load_main_binding(session_id)
+        checkpointer = CheckpointerFactory.get_checkpointer()
+        # An adapter driven without the Runtime is the creation boundary of a Session nobody created yet.
+        if binding is None and not get_session_metadata(session_id, cache_bust=True, enable_writeback=False):
+            binding = await initialize_main_conversation(session_id)
+        session_options = {"conversation_binding": binding, "checkpointer": checkpointer} if binding is not None else {}
         session = create_agent_session(
             session_id=session_id,
             card=getattr(self._instance, "card", None),
             kv_cache_runtime=get_kv_cache_runtime(),
+            **session_options,
         )
         await session.pre_run(inputs={})
         await self.install_session_input_guard()
@@ -18565,24 +18575,29 @@ class JiuWenSwarmDeepAdapter:
         self, request: AgentRequest, inputs: dict[str, Any]
     ) -> AgentResponse:
         """Bind trusted host identity and command execution for one request."""
-        from jiuwenswarm.runtime.context_handoff import ContextHandoffError
-
-        try:
-            async with self._conversation_request_admission(request):
-                return await self._process_message_with_host_context(request, inputs)
-        except ContextHandoffError as exc:
-            return AgentResponse(request_id=request.request_id, channel_id=request.channel_id,
-                                 ok=False, payload=exc.payload(), metadata=request.metadata)
+        async with self._conversation_request_admission(request):
+            return await self._process_message_with_host_context(request, inputs)
 
     @asynccontextmanager
     async def _conversation_request_admission(self, request: AgentRequest):
         if not getattr(self, "_is_session_scoped_adapter", False) or getattr(self, "_external_harness_binding", None):
             yield
             return
-        from jiuwenswarm.runtime.context_handoff import agent_conversation_request
+        from jiuwenswarm.agents.harness.common.session_ops_service import resolve_live_agent_session
+        from openjiuwen.core.context_engine import ConversationBinding
 
-        async with agent_conversation_request(request, self._instance):
-            yield
+        session = resolve_live_agent_session(self._instance, request.session_id)
+        get_binding = getattr(session, "get_conversation_binding", None)
+        if (callable(get_binding) and isinstance(get_binding(), ConversationBinding)
+                and self._is_interrupt_resume_dispatch(request.params or {})):
+            from openjiuwen.core.single_agent.interrupt.state import INTERRUPTION_KEY
+
+            # Validate storage before the permission queue reserves its
+            # head answer; a failed refresh must leave that answer pending.
+            await self._instance.react_agent.context_engine.create_context(
+                session=session, allow_pending_tool_calls=session.get_state(INTERRUPTION_KEY) is not None,
+            )
+        yield
 
     async def _process_message_with_host_context(
         self, request: AgentRequest, inputs: dict[str, Any]
@@ -19377,16 +19392,10 @@ class JiuWenSwarmDeepAdapter:
         self, request: AgentRequest, inputs: dict[str, Any]
     ) -> AsyncIterator[AgentResponseChunk]:
         """Bind trusted host identity and command execution for one stream."""
-        from jiuwenswarm.runtime.context_handoff import ContextHandoffError
-
-        try:
-            async with self._conversation_request_admission(request):
-                async with aclosing(self._process_stream_with_host_context(request, inputs)) as stream:
-                    async for chunk in stream:
-                        yield chunk
-        except ContextHandoffError as exc:
-            yield AgentResponseChunk(request_id=request.request_id, channel_id=request.channel_id,
-                                     payload=exc.payload(), is_complete=True)
+        async with self._conversation_request_admission(request):
+            async with aclosing(self._process_stream_with_host_context(request, inputs)) as stream:
+                async for chunk in stream:
+                    yield chunk
 
     async def _process_stream_with_host_context(
         self, request: AgentRequest, inputs: dict[str, Any]

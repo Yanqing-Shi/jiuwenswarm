@@ -859,15 +859,15 @@ def _write_metadata_unfenced(
 
         if options.preserve_pin_fields and current is not None:
             to_write = _merge_pin_fields(current, to_write)
-        # Conversation ownership is written by its coordinator. A queued history
-        # or UI mode snapshot must never undo a committed handoff journal.
-        owns_handoff = options.merge_fields is not None and "conversation_handoff" in options.merge_fields
-        if current is not None and not owns_handoff:
+        # The conversation storage layout is written only by its host. Queued
+        # history/mode snapshots cannot roll it back.
+        owns_storage = options.merge_fields is not None and "context_storage" in options.merge_fields
+        if current is not None and not owns_storage:
             to_write = dict(to_write)
-            if "conversation_handoff" in current:
-                to_write["conversation_handoff"] = current["conversation_handoff"]
+            if "context_storage" in current:
+                to_write["context_storage"] = current["context_storage"]
             else:
-                to_write.pop("conversation_handoff", None)
+                to_write.pop("context_storage", None)
         # Selection has its own authoritative field update. Queued history/title
         # snapshots must not roll a newer selection back (including a clear).
         owns_selection = options.merge_fields is not None and "model_selection" in options.merge_fields
