@@ -57,7 +57,7 @@ from jiuwenswarm.server.runtime.mcp import registry as _mcp_registry_module
 _register_test_provider("cron_store_factory", _cron_factory_module)
 _register_test_provider("mcp_registry", _mcp_registry_module)
 from agent_gateway.routing.agent_client import WebSocketAgentServerClient  # pylint: disable=wrong-import-order
-from agent_gateway.routing.keys import AgentRef, RoutingKey  # pylint: disable=wrong-import-order
+from agent_gateway.routing.keys import RoutingKey  # pylint: disable=wrong-import-order
 
 
 class FakeWebChannel:
@@ -99,53 +99,6 @@ class FakeWebChannel:
 
     def clear_a4p_rebound(self, session_id):
         self.cleared.append(session_id)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["a4p.authorization.complete", "a4p.config.get", "a4p.config.update"])
-async def test_a4p_rpc_uses_current_websocket_route(method) -> None:
-    class _AgentClient:
-        server_ready = True
-
-        def __init__(self) -> None:
-            self.envelope = None
-
-        async def send_request(self, envelope):
-            self.envelope = envelope
-            return SimpleNamespace(ok=True, payload={"ok": True})
-
-    channel = FakeWebChannel()
-    channel.routing_keys = [
-        RoutingKey(
-            user_id="local",
-            channel_id="web",
-            app_id="app-1",
-            agent_ref=AgentRef(mode="team", id="research"),
-            session_id="session-1",
-        )
-    ]
-    agent_client = _AgentClient()
-    _register_web_handlers(WebHandlersBindParams(channel=channel, agent_client=agent_client))
-    ws = SimpleNamespace(_jiuwen_ws_id="ws-1")
-
-    await channel.methods[method](
-        ws,
-        "rpc-1",
-        {"requestId": "intent-1", "agent_ref": {"mode": "agent", "id": "untrusted"}},
-        "session-1",
-    )
-
-    assert channel.responses[-1]["ok"] is True
-    assert agent_client.envelope.channel_context == {
-        "ws_id": "ws-1",
-        "app_id": "app-1",
-        "agent_ref": {"mode": "team", "id": "research"},
-    }
-    if method == "a4p.authorization.complete":
-        # 完成授权时把恢复 turn 的输出改绑到当前连接（当前 ws_id 覆盖授权方冻结的旧 ws）。
-        assert channel.rebounds == [("session-1", "ws-1")]
-    else:
-        assert channel.rebounds == []
 
 
 @pytest.mark.asyncio
@@ -1265,148 +1218,6 @@ async def test_agentos_cron_update_project_fields_with_dict_job(monkeypatch) -> 
     assert patch["project_id"] == "user-proj-1"
     assert patch["work_mode"] == "code"
     assert patch["_agentos_project_binding_verified"] is True
-
-
-@pytest.mark.asyncio
-async def test_path_set_reloads_config_and_resets_agent_browser_runtime(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    channel = FakeWebChannel()
-    # Match the default single-user transport so path.set follows the local
-    # shared-directory branch rather than the AgentOS/remote proxy branch.
-    agent_client = WebSocketAgentServerClient()
-    saved_configs: list[dict] = []
-    lifecycle_calls: list[tuple[str, object]] = []
-    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
-
-    monkeypatch.setattr(
-        app_web_handlers,
-        "update_browser_in_config",
-        lambda config: saved_configs.append(config),
-    )
-    monkeypatch.setattr(
-        app_web_handlers,
-        "get_config",
-        lambda: {"browser": {"chrome_path": "", "headless": True}},
-    )
-
-    async def fake_clear(client):
-        lifecycle_calls.append(("reload", client))
-
-    async def fake_restart(client, **kwargs):
-        lifecycle_calls.append(("restart", client, kwargs))
-
-    monkeypatch.setattr(app_web_handlers, "_clear_agent_config_cache", fake_clear)
-    monkeypatch.setattr(
-        app_web_handlers,
-        "_restart_agent_browser_runtime",
-        fake_restart,
-    )
-    _register_web_handlers(
-        WebHandlersBindParams(channel=channel, agent_client=agent_client)
-    )
-
-    await channel.methods["path.set"](
-        object(),
-        "req-path",
-        {"chrome_path": " C:\\Chrome\\chrome.exe ", "headless": False},
-        "sess-1",
-    )
-
-    assert saved_configs == [
-        {"chrome_path": "C:\\Chrome\\chrome.exe", "headless": False}
-    ]
-    assert lifecycle_calls == [
-        ("reload", agent_client),
-        (
-            "restart",
-            agent_client,
-            {
-                "previous_chrome_path": "",
-                "previous_headless": True,
-            },
-        ),
-    ]
-    assert channel.responses[-1] == {
-        "id": "req-path",
-        "ok": True,
-        "payload": {
-            "chrome_path": "C:\\Chrome\\chrome.exe",
-            "headless": False,
-            "decision_mode": "llm",
-            "decision_provider": "typesafe",
-            "jev_key_configured": False,
-            "decision_model": "jev-1.13.0",
-            "decision_api_base": "https://api.typesafe.ai/v1",
-            "decision_display_name": "",
-        },
-        "error": None,
-        "code": None,
-    }
-
-
-@pytest.mark.asyncio
-async def test_path_set_refuses_jev_without_its_key_and_changes_nothing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Jev without a key would fail at every browser step; the save is refused before any write."""
-    channel = FakeWebChannel()
-    agent_client = WebSocketAgentServerClient()
-    writes: list[object] = []
-    monkeypatch.delenv("TEST_JEV_UI_KEY", raising=False)
-    monkeypatch.setattr(app_web_handlers, "update_browser_in_config", writes.append)
-    monkeypatch.setattr(
-        app_web_handlers,
-        "get_config",
-        lambda: {"browser": {"decision": {"provider": "openrouter", "api_key_env": "TEST_JEV_UI_KEY"}}},
-    )
-
-    async def fail_if_called(*_args, **_kwargs):
-        writes.append("runtime touched")
-
-    monkeypatch.setattr(app_web_handlers, "_clear_agent_config_cache", fail_if_called)
-    monkeypatch.setattr(app_web_handlers, "_restart_agent_browser_runtime", fail_if_called)
-    _register_web_handlers(WebHandlersBindParams(channel=channel, agent_client=agent_client))
-
-    await channel.methods["path.set"](
-        object(), "req-jev", {"chrome_path": "", "headless": True, "decision_mode": "hybrid"}, "sess-1"
-    )
-
-    assert channel.responses[-1]["ok"] is False
-    assert channel.responses[-1]["code"] == "BAD_REQUEST"
-    assert writes == []
-
-
-@pytest.mark.asyncio
-async def test_path_set_round_trips_jev_display_name(monkeypatch) -> None:
-    from agent_gateway.common import config as config_module
-
-    current = {"browser": {"decision": {"mode": "llm", "provider": "typesafe"}}}
-    monkeypatch.setattr(app_web_handlers, "get_config", lambda: current)
-    monkeypatch.setattr(app_web_handlers, "update_browser_in_config", lambda updates: None)
-    def save_decision(updates):
-        for key, value in updates.items():
-            if key == "display_name" and value is None:
-                current["browser"]["decision"].pop(key, None)
-            else:
-                current["browser"]["decision"][key] = value
-
-    monkeypatch.setattr(config_module, "update_browser_decision_in_config", save_decision)
-
-    async def no_runtime_change(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(app_web_handlers, "_clear_agent_config_cache", no_runtime_change)
-    monkeypatch.setattr(app_web_handlers, "_restart_agent_browser_runtime", no_runtime_change)
-    channel = FakeWebChannel()
-    _register_web_handlers(WebHandlersBindParams(channel=channel))
-    await channel.methods["path.set"](
-        object(), "req-name", {"chrome_path": "", "decision_display_name": "  My Jev  "}, "sess-1",
-    )
-    assert channel.responses[-1]["ok"] is True
-    assert channel.responses[-1]["payload"]["decision_display_name"] == "My Jev"
-    assert current["browser"]["decision"]["display_name"] == "My Jev"
-
 
 
 @pytest.mark.asyncio

@@ -84,7 +84,10 @@ import {
   canApplyHistoryCursorBatch,
   prefetchHistoryBatches,
 } from './features/historyPagination';
-import { isPlanWireMode, resolvePlanWireMode } from './features/planMode/wireMode';
+import { isPlanWireMode, resolvePlanWireMode, stripPlanSuffix } from './features/planMode/wireMode';
+import { commitSessionMode, type SessionModeCommitOutcome } from './features/sessionMode/commitSessionMode';
+import { canSwitchSessionModeInPlace } from './features/sessionMode/inPlaceModeSwitch';
+import { getWebTransport } from './utils/env';
 import { queueOrAddGoalObjectiveMessage } from './features/goalPendingObjectiveBubble';
 import {
   normalizeToolCallPayload,
@@ -93,7 +96,7 @@ import {
 import { readAgentTemplateName } from './features/agentIdentity';
 import { normalizeTeamLeaderIdentity } from './features/teamLeaderIdentity';
 import { normalizeTeamGroupIdentity } from './features/teamGroupIdentity';
-import { useWebSocket, mergePersistedGoalCompletionMessages, stampGoalObjectiveMessages, useResponsiveLayout, useResponsivePanelResize } from './hooks';
+import { useWebSocket, mergePersistedGoalCompletionMessages, resolveOutgoingMode, stampGoalObjectiveMessages, useResponsiveLayout, useResponsivePanelResize } from './hooks';
 import { webClient, webRequest } from './services/webClient';
 import { attachTeamSession, resetTeamAttachments } from './services/teamAttach';
 import type { WorkflowRun } from './components/teamArea/workflowTypes';
@@ -3348,6 +3351,49 @@ function AppContent({
     enterNewConversation(mode, options);
   }, [enterNewConversation, mode]);
 
+  // 会话内切换模式：经 mode.set 提交（与 TUI 同一后端入口），以服务端返回的模式为准
+  const sessionModeCommitsRef = useRef<Set<string>>(new Set());
+  const switchSessionModeInPlace = useCallback(async (
+    targetSessionId: string,
+    currentMode: AgentMode,
+    targetMode: AgentMode,
+  ) => {
+    const inFlight = sessionModeCommitsRef.current;
+    if (inFlight.has(targetSessionId)) return;
+    inFlight.add(targetSessionId);
+    let outcome: SessionModeCommitOutcome;
+    try {
+      outcome = await commitSessionMode(request, {
+        sessionId: targetSessionId,
+        mode: resolveOutgoingMode(targetSessionId, targetMode),
+        expectedMode: resolveOutgoingMode(targetSessionId, currentMode),
+      });
+    } finally {
+      inFlight.delete(targetSessionId);
+    }
+    if (outcome.status === 'committed' || outcome.status === 'not_applied') {
+      const committedMode = stripPlanSuffix(outcome.mode) as AgentMode;
+      setMode(targetSessionId, committedMode);
+      useSessionStore.getState().updateSession(targetSessionId, { mode: committedMode });
+      if (outcome.status === 'committed') return;
+    }
+    const content = outcome.status === 'not_applied'
+      ? t('chat.sessionModeSwitch.conflict')
+      : outcome.status === 'busy'
+        ? t('chat.sessionModeSwitch.busy')
+        : outcome.status === 'uncertain'
+          ? t('chat.sessionModeSwitch.uncertain')
+          : t('chat.sessionModeSwitch.failed', {
+            error: outcome.error instanceof Error ? outcome.error.message : String(outcome.error),
+          });
+    toast.open({
+      content,
+      variant: 'error',
+      testId: 'app-session-mode-switch-toast',
+      dataVariant: outcome.status,
+    });
+  }, [request, setMode, t]);
+
   // 切换模式
   const handleSwitchMode = useCallback((targetMode: AgentMode) => {
     const currentId = sessionIdRef.current;
@@ -3358,8 +3404,18 @@ function AppContent({
       setMode(NEW_CONVERSATION_ID, targetMode);
       return;
     }
+    const currentMode = currentSessionRuntime?.mode;
+    const inPlace = canSwitchSessionModeInPlace(
+      { enterprise: isEnterprise(), transport: getWebTransport() },
+      currentMode,
+      targetMode,
+    );
+    if (inPlace && currentMode) {
+      void switchSessionModeInPlace(currentId, currentMode, targetMode);
+      return;
+    }
     enterNewConversation(targetMode);
-  }, [enterNewConversation, setMode]);
+  }, [enterNewConversation, setMode, switchSessionModeInPlace]);
 
   const handleSessionInputIntent = useCallback((targetSessionId: string) => {
     if (!targetSessionId || targetSessionId === NEW_CONVERSATION_ID) return;

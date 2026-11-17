@@ -69,6 +69,15 @@ async def test_gateway_session_events_carry_project_id(archive, monkeypatch):
     await methods["session.archive"](
         object(), "req", {"session_ids": ["sess_a"]}, None, "alice"
     )
+    # Acceptance is not completion: pending cleanup must not emit archived.
+    assert events == []
+    pending = channel.send_response.await_args.kwargs["payload"]["results"][0]
+    assert pending["stop_pending"] is True
+    assert pending["project_id"] == "default"
+    # The fixture drains finalizers; an idempotent retry now reports completion.
+    await methods["session.archive"](
+        object(), "req-completed", {"session_ids": ["sess_a"]}, None, "alice"
+    )
     # session.archived 直接事件必须符合 §5.10.11 契约：project_id 必返。
     assert len(events) == 1
     event, payload = events[0]
@@ -77,9 +86,7 @@ async def test_gateway_session_events_carry_project_id(archive, monkeypatch):
     assert payload["project_id"] == "default"
     assert payload["archived"] is True
     assert isinstance(payload["archived_at"], float)
-    # Archive now returns before the directory move; the event says cleanup is
-    # still pending instead of pretending it already finished.
-    assert payload["stop_pending"] is True
+    assert payload["stop_pending"] is False
     await methods["session.delete"](
         object(), "req", {"session_id": "sess_a"}, None, "alice"
     )
@@ -1044,6 +1051,7 @@ async def test_parked_team_stream_archive_proceeds_without_touching_stream(
         has_inflight_request=lambda sid: False,
         is_round_active=lambda sid: False,
         is_round_ended_request=lambda sid, rid: True,
+        is_attach_waiter=lambda sid, rid: False,
         stop_session_runtime=stop_session_runtime,
     )
     monkeypatch.setattr(team_manager, "_team_manager", manager)
@@ -1087,6 +1095,7 @@ async def test_parked_team_stream_delete_proceeds_and_stops_runtime(archive, mon
         has_inflight_request=lambda sid: False,
         is_round_active=lambda sid: sid == "sess_b",
         is_round_ended_request=lambda sid, rid: True,
+        is_attach_waiter=lambda sid, rid: False,
     )
     monkeypatch.setattr(team_manager, "_team_manager", manager)
     runtime._pending_chat_requests = {"sess_a": {"req_1"}, "sess_b": {"req_2"}}
@@ -1159,6 +1168,7 @@ def test_has_parked_team_streams_requires_all_requests_round_ended(monkeypatch):
         has_inflight_request=lambda sid: False,
         is_round_active=lambda sid: False,
         is_round_ended_request=lambda sid, rid: rid in ended,
+        is_attach_waiter=lambda sid, rid: False,
     )
     monkeypatch.setattr(team_manager, "_team_manager", manager)
     # A request without a released round (preparing or mid-round) is live.
