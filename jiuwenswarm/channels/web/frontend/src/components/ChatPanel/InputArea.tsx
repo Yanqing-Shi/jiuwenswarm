@@ -233,6 +233,8 @@ import { isImeCompositionKey } from './imeComposition';
 import { useTaskAsr } from '../../features/taskAsr/useTaskAsr';
 import { RecordingWaveform } from '../../features/taskAsr/RecordingWaveform';
 import { useTaskAsrEnabled } from '../../features/taskAsr/featureFlag';
+import { allowsInPlaceModeSwitch } from '../../features/sessionMode/inPlaceModeSwitch';
+import { getWebTransport } from '../../utils/env';
 import { ApplicationPluginTaskInputActions } from '../../applicationPlugins/ApplicationPluginOutlet';
 
 /** 输入栏下拉所需的最小技能数据结构（与 SkillPanel 中的 SkillItem 保持一致） */
@@ -1227,7 +1229,14 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     teamSessionLive,
     NEW_CONVERSATION_ID,
   );
-  const modeLocked = hasHistory || isProcessing;
+  // A conversation with history changes mode in place via mode.set (personal edition over WebSocket).
+  const inPlaceModeSwitchAllowed = allowsInPlaceModeSwitch({
+    enterprise,
+    transport: getWebTransport(),
+  });
+  // Upstream no longer locks enterprise outright: a conversation without history picks its mode
+  // locally. In-place switching stays personal-only, so enterprise locks as soon as history exists.
+  const modeLocked = isProcessing || (hasHistory && !inPlaceModeSwitchAllowed);
   const [teamQuotaHint, setTeamQuotaHint] = useState('');
   const [teamCreateBlocked, setTeamCreateBlocked] = useState(false);
 
@@ -4060,13 +4069,14 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   const handleModeSwitch = useCallback(
     async (targetMode: AgentMode) => {
       if (modeLocked || mode === targetMode) return;
-      // Draft-session in-place mode switch: skills picked for the previous
-      // mode no longer apply, so drop them from the store and remove their
-      // inline chips from the editor. (Switching from a real session enters a
-      // fresh conversation instead, whose rebuilt runtime starts without
-      // skills, so the old session keeps its picks.)
+      // In-place mode switch (a draft, or a saved session that can commit
+      // mode.set): skills picked for the previous mode no longer apply, so
+      // drop them from the store and remove their inline chips from the
+      // editor. (Otherwise switching from a real session enters a fresh
+      // conversation, whose rebuilt runtime starts without skills, so the old
+      // session keeps its picks.)
       const sid = activeSessionId;
-      if (sid && sid === NEW_CONVERSATION_ID) {
+      if (sid && (sid === NEW_CONVERSATION_ID || inPlaceModeSwitchAllowed)) {
         clearSelectedSkills(sid);
         const el = inputRef.current;
         if (el) {
@@ -4083,7 +4093,15 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       }
       onSwitchMode(targetMode);
     },
-    [activeSessionId, clearSelectedSkills, extractPlainText, hasHistory, isProcessing, mode, onSwitchMode],
+    [
+      activeSessionId,
+      clearSelectedSkills,
+      extractPlainText,
+      inPlaceModeSwitchAllowed,
+      modeLocked,
+      mode,
+      onSwitchMode,
+    ],
   );
 
   const handleModeSelect = useCallback(

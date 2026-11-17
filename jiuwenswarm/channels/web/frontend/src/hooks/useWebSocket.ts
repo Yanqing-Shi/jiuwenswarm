@@ -599,7 +599,7 @@ function getSessionWorkMode(sessionId: string): string | undefined {
  * 时还要带上 work_mode，以便 `resolvePlanWireMode` 路由到 `team.work.plan` /
  * `team.code.plan`。
  */
-function resolveOutgoingMode(sessionId: string, baseMode: AgentMode | string | undefined): string {
+export function resolveOutgoingMode(sessionId: string, baseMode: AgentMode | string | undefined): string {
   // profile（work/code）取自 per-session 的 Session.work_mode（getSessionWorkMode
   // 优先 session，再 project、最后全局 workMode），否则 session 切换时全局 workMode
   // 不同步，跨 profile 看历史会话 / interrupt resume / 队列重发会产出
@@ -772,7 +772,6 @@ interface UseWebSocketReturn {
   cancel: (sessionId: string) => Promise<boolean>;
   supplement: (sessionId: string, newInput: string) => Promise<void>;
   resume: (sessionId: string) => Promise<void>;
-  switchMode: (sessionId: string, mode: AgentMode) => Promise<void>;
   disconnect: () => void;
   sendUserAnswer: (
     sessionId: string,
@@ -2857,43 +2856,6 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
       }
     },
     [interrupt, t]
-  );
-
-  // 切换模式
-  const switchMode = useCallback(
-    async (sessionId: string, mode: AgentMode) => {
-      // 标记正在切换模式
-      useChatStore.getState().setSwitchingMode(sessionId, true);
-
-      const currentMode = useSessionStore.getState().getRuntime(sessionId)?.mode;
-      // Reset harnessStore when leaving auto_harness mode
-      if (currentMode === 'auto_harness' && mode !== 'auto_harness') {
-        useHarnessStore.getState().reset(sessionId);
-      }
-
-      // 只有在有任务执行时才调用 interrupt
-      if (sessionId && sessionId !== 'new') {
-        const runtime = useChatStore.getState().getRuntime(sessionId);
-        if (runtime?.isProcessing || runtime?.isPaused) {
-          try {
-            await interrupt(sessionId, 'cancel');
-          } catch {
-            // 忽略中断错误
-          }
-        }
-      }
-
-      clearConnectionPresentationForUserAction(sessionId);
-      useSessionStore.getState().setMode(sessionId, mode);
-      if (sessionId && sessionId !== 'new') {
-        updateSession(sessionId, { mode });
-      }
-      // 延迟重置标志
-      setTimeout(() => {
-        useChatStore.getState().setSwitchingMode(sessionId, false);
-      }, 300);
-    },
-    [clearConnectionPresentationForUserAction, updateSession, interrupt],
   );
 
   // 发送用户回答
@@ -6499,7 +6461,6 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     cancel,
     supplement,
     resume,
-    switchMode,
     disconnect,
     sendUserAnswer,
     respondActivate,
