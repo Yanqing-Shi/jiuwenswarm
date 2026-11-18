@@ -21,15 +21,19 @@ generated: true
 | [jiuwenswarm/agents/harness](#module-4) |
 | [jiuwenswarm/agents/harness/common/rails](#module-5) |
 | [jiuwenswarm/agents/harness/common/tools](#module-6) |
-| [jiuwenswarm/channels/web/frontend](#module-7) |
-| [jiuwenswarm/channels/web/frontend/src/features/settings](#module-8) |
-| [jiuwenswarm/common](#module-9) |
-| [jiuwenswarm/extensions/sdk](#module-10) |
-| [jiuwenswarm/resources](#module-11) |
-| [jiuwenswarm/resources/plugins/ttse](#module-12) |
-| [jiuwenswarm/server/runtime/agent_adapter](#module-13) |
-| [scripts](#module-14) |
-| [tests](#module-15) |
+| [jiuwenswarm/agents/harness/team](#module-7) |
+| [jiuwenswarm/channels/web/frontend](#module-8) |
+| [jiuwenswarm/channels/web/frontend/src/features/settings](#module-9) |
+| [jiuwenswarm/common](#module-10) |
+| [jiuwenswarm/extensions/sdk](#module-11) |
+| [jiuwenswarm/resources](#module-12) |
+| [jiuwenswarm/resources/plugins/ttse](#module-13) |
+| [jiuwenswarm/runtime](#module-14) |
+| [jiuwenswarm/server](#module-15) |
+| [jiuwenswarm/server/runtime/agent_adapter](#module-16) |
+| [scripts](#module-17) |
+| [scripts/acceptance](#module-18) |
+| [tests](#module-19) |
 
 <a id="module-1"></a>
 
@@ -82,13 +86,22 @@ generated: true
 
 <a id="module-7"></a>
 
+## jiuwenswarm/agents/harness/team
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 与 TUI 共用会话模式切换（mode.set / mode.get） | Yanqing-Shi | jiuwenswarm/agents/harness/team, jiuwenswarm/runtime, jiuwenswarm/server, jiuwenswarm/common, jiuwenswarm/channels/web/frontend, scripts/acceptance | jiuwenswarm/agents/harness/team/team_manager.py, tests/unit_tests/runtime/test_session_mode_switch.py, tests/unit_tests/server/test_archive_lifecycle.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/channels/web/frontend/src/features/sessionMode/commitSessionMode.ts, jiuwenswarm/channels/web/frontend/src/features/sessionMode/inPlaceModeSwitch.ts, jiuwenswarm/channels/web/frontend/src/App.tsx, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/InputArea.tsx, jiuwenswarm/channels/web/frontend/src/hooks/useWebSocket.ts, jiuwenswarm/channels/web/frontend/src/features/sessionMode/modeSwitchGate.ts, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/index.tsx, jiuwenswarm/channels/web/frontend/src/stores/chatStore.ts, scripts/acceptance/web_mode_switch_bench.py | 无独立 D：无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
+
+<a id="module-8"></a>
+
 ## jiuwenswarm/channels/web/frontend
 
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
 | [F_20261029_1757_mcp-app-agent-stack-refresh](F_20261029_1757_mcp-app-agent-stack-refresh.md) | F | MCP App 到 Agent 的 stacked PR 更新 | LI Jinyang | jiuwenswarm/channels/web/frontend, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/channels/web/frontend/src/features/mcpApps/mcpAppContext.ts, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/McpAppView.tsx, jiuwenswarm/channels/web/frontend/src/App.tsx, jiuwenswarm/channels/web/frontend/src/hooks/useWebSocket.ts, jiuwenswarm/server/runtime/agent_adapter/user_turn.py | 无独立 D：本次迁移已有 follow-up 实现，不新建方案；需求依据为主仓库 issue 4944 和原 MR !1。 |
+| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 与 TUI 共用会话模式切换（mode.set / mode.get） | Yanqing-Shi | jiuwenswarm/agents/harness/team, jiuwenswarm/runtime, jiuwenswarm/server, jiuwenswarm/common, jiuwenswarm/channels/web/frontend, scripts/acceptance | jiuwenswarm/agents/harness/team/team_manager.py, tests/unit_tests/runtime/test_session_mode_switch.py, tests/unit_tests/server/test_archive_lifecycle.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/channels/web/frontend/src/features/sessionMode/commitSessionMode.ts, jiuwenswarm/channels/web/frontend/src/features/sessionMode/inPlaceModeSwitch.ts, jiuwenswarm/channels/web/frontend/src/App.tsx, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/InputArea.tsx, jiuwenswarm/channels/web/frontend/src/hooks/useWebSocket.ts, jiuwenswarm/channels/web/frontend/src/features/sessionMode/modeSwitchGate.ts, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/index.tsx, jiuwenswarm/channels/web/frontend/src/stores/chatStore.ts, scripts/acceptance/web_mode_switch_bench.py | 无独立 D：无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
 
-<a id="module-8"></a>
+<a id="module-9"></a>
 
 ## jiuwenswarm/channels/web/frontend/src/features/settings
 
@@ -96,7 +109,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [F_20261110_2026_affinity-settings](F_20261110_2026_affinity-settings.md) | F | 实验功能算力亲和开关与自定义模型能力接入 | MengHan18 | jiuwenswarm/common, jiuwenswarm/channels/web/frontend/src/features/settings | jiuwenswarm/common/kv_cache_affinity_config.py, jiuwenswarm/common/config.py, jiuwenswarm/common/config_panel/config_set_handlers.py, jiuwenswarm/common/config_panel/model_resource_handlers.py, jiuwenswarm/common/config_panel/models_handlers.py, jiuwenswarm/channels/web/frontend/src/features/settings/modules/models/ModelDialog.tsx, jiuwenswarm/channels/web/frontend/src/features/settings/modules/experimental/definition.ts, jiuwenswarm/agents/swarm/config_specs.py, jiuwenswarm/server/runtime/session/kv_cache/kv_cache_model_provider.py, jiuwenswarm/server/runtime/session/kv_cache/kv_cache_application_runtime.py | 无独立 D：外部初始方案为 docs_HM_kvc/E前端开关打开/01 和 02；全局准入和交互按用户确认的 04 小白版文档替代，无仓库内 D 标识。 |
 
-<a id="module-9"></a>
+<a id="module-10"></a>
 
 ## jiuwenswarm/common
 
@@ -104,8 +117,9 @@ generated: true
 |---|---|---|---|---|---|---|
 | [F_20261110_2026_affinity-settings](F_20261110_2026_affinity-settings.md) | F | 实验功能算力亲和开关与自定义模型能力接入 | MengHan18 | jiuwenswarm/common, jiuwenswarm/channels/web/frontend/src/features/settings | jiuwenswarm/common/kv_cache_affinity_config.py, jiuwenswarm/common/config.py, jiuwenswarm/common/config_panel/config_set_handlers.py, jiuwenswarm/common/config_panel/model_resource_handlers.py, jiuwenswarm/common/config_panel/models_handlers.py, jiuwenswarm/channels/web/frontend/src/features/settings/modules/models/ModelDialog.tsx, jiuwenswarm/channels/web/frontend/src/features/settings/modules/experimental/definition.ts, jiuwenswarm/agents/swarm/config_specs.py, jiuwenswarm/server/runtime/session/kv_cache/kv_cache_model_provider.py, jiuwenswarm/server/runtime/session/kv_cache/kv_cache_application_runtime.py | 无独立 D：外部初始方案为 docs_HM_kvc/E前端开关打开/01 和 02；全局准入和交互按用户确认的 04 小白版文档替代，无仓库内 D 标识。 |
 | [F_20261111_1528_unified-observability-config](F_20261111_1528_unified-observability-config.md) | F | Team 与单 Agent 可观测性配置统一为 observability 段 | alan_cheng | jiuwenswarm/common, jiuwenswarm/agents/harness, jiuwenswarm/resources, deploy/yuanrong, scripts | jiuwenswarm/common/observability_config.py, jiuwenswarm/common/config.py, jiuwenswarm/agents/harness/agent_observability.py, jiuwenswarm/agents/harness/team/team_manager.py, jiuwenswarm/resources/config.yaml, deploy/yuanrong/conf/gateway-config-yuanrong.template.yaml, scripts/reset_trajectory_data.py, tests/unit_tests/common/test_observability_config.py, tests/unit_tests/agentserver/test_trajectory_runtime_wiring.py | 无独立 D：用户在会话中确认的配置收敛改动，无独立设计编号。 |
+| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 与 TUI 共用会话模式切换（mode.set / mode.get） | Yanqing-Shi | jiuwenswarm/agents/harness/team, jiuwenswarm/runtime, jiuwenswarm/server, jiuwenswarm/common, jiuwenswarm/channels/web/frontend, scripts/acceptance | jiuwenswarm/agents/harness/team/team_manager.py, tests/unit_tests/runtime/test_session_mode_switch.py, tests/unit_tests/server/test_archive_lifecycle.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/channels/web/frontend/src/features/sessionMode/commitSessionMode.ts, jiuwenswarm/channels/web/frontend/src/features/sessionMode/inPlaceModeSwitch.ts, jiuwenswarm/channels/web/frontend/src/App.tsx, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/InputArea.tsx, jiuwenswarm/channels/web/frontend/src/hooks/useWebSocket.ts, jiuwenswarm/channels/web/frontend/src/features/sessionMode/modeSwitchGate.ts, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/index.tsx, jiuwenswarm/channels/web/frontend/src/stores/chatStore.ts, scripts/acceptance/web_mode_switch_bench.py | 无独立 D：无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
 
-<a id="module-10"></a>
+<a id="module-11"></a>
 
 ## jiuwenswarm/extensions/sdk
 
@@ -113,7 +127,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [F_20261027_1843_ttse-plugin-rail](F_20261027_1843_ttse-plugin-rail.md) | F | TTSE 以插件 Rail 接入主 Coding Agent | xinyang_bali | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/agents/harness, jiuwenswarm/extensions/sdk, jiuwenswarm/resources/plugins/ttse | jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py, jiuwenswarm/extensions/sdk/plugin_runtime.py, jiuwenswarm/agents/harness/agent_observability.py, jiuwenswarm/resources/plugins/ttse/manifest.json, scripts/package_ttse_plugin.py | 无独立 D：用户确认执行 D:/files/自演进/方案/ttse适配code agent 中的外部适配方案，该资料没有仓内 D 标识。 |
 
-<a id="module-11"></a>
+<a id="module-12"></a>
 
 ## jiuwenswarm/resources
 
@@ -121,7 +135,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [F_20261111_1528_unified-observability-config](F_20261111_1528_unified-observability-config.md) | F | Team 与单 Agent 可观测性配置统一为 observability 段 | alan_cheng | jiuwenswarm/common, jiuwenswarm/agents/harness, jiuwenswarm/resources, deploy/yuanrong, scripts | jiuwenswarm/common/observability_config.py, jiuwenswarm/common/config.py, jiuwenswarm/agents/harness/agent_observability.py, jiuwenswarm/agents/harness/team/team_manager.py, jiuwenswarm/resources/config.yaml, deploy/yuanrong/conf/gateway-config-yuanrong.template.yaml, scripts/reset_trajectory_data.py, tests/unit_tests/common/test_observability_config.py, tests/unit_tests/agentserver/test_trajectory_runtime_wiring.py | 无独立 D：用户在会话中确认的配置收敛改动，无独立设计编号。 |
 
-<a id="module-12"></a>
+<a id="module-13"></a>
 
 ## jiuwenswarm/resources/plugins/ttse
 
@@ -129,7 +143,23 @@ generated: true
 |---|---|---|---|---|---|---|
 | [F_20261027_1843_ttse-plugin-rail](F_20261027_1843_ttse-plugin-rail.md) | F | TTSE 以插件 Rail 接入主 Coding Agent | xinyang_bali | jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/agents/harness, jiuwenswarm/extensions/sdk, jiuwenswarm/resources/plugins/ttse | jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py, jiuwenswarm/extensions/sdk/plugin_runtime.py, jiuwenswarm/agents/harness/agent_observability.py, jiuwenswarm/resources/plugins/ttse/manifest.json, scripts/package_ttse_plugin.py | 无独立 D：用户确认执行 D:/files/自演进/方案/ttse适配code agent 中的外部适配方案，该资料没有仓内 D 标识。 |
 
-<a id="module-13"></a>
+<a id="module-14"></a>
+
+## jiuwenswarm/runtime
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 与 TUI 共用会话模式切换（mode.set / mode.get） | Yanqing-Shi | jiuwenswarm/agents/harness/team, jiuwenswarm/runtime, jiuwenswarm/server, jiuwenswarm/common, jiuwenswarm/channels/web/frontend, scripts/acceptance | jiuwenswarm/agents/harness/team/team_manager.py, tests/unit_tests/runtime/test_session_mode_switch.py, tests/unit_tests/server/test_archive_lifecycle.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/channels/web/frontend/src/features/sessionMode/commitSessionMode.ts, jiuwenswarm/channels/web/frontend/src/features/sessionMode/inPlaceModeSwitch.ts, jiuwenswarm/channels/web/frontend/src/App.tsx, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/InputArea.tsx, jiuwenswarm/channels/web/frontend/src/hooks/useWebSocket.ts, jiuwenswarm/channels/web/frontend/src/features/sessionMode/modeSwitchGate.ts, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/index.tsx, jiuwenswarm/channels/web/frontend/src/stores/chatStore.ts, scripts/acceptance/web_mode_switch_bench.py | 无独立 D：无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
+
+<a id="module-15"></a>
+
+## jiuwenswarm/server
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 与 TUI 共用会话模式切换（mode.set / mode.get） | Yanqing-Shi | jiuwenswarm/agents/harness/team, jiuwenswarm/runtime, jiuwenswarm/server, jiuwenswarm/common, jiuwenswarm/channels/web/frontend, scripts/acceptance | jiuwenswarm/agents/harness/team/team_manager.py, tests/unit_tests/runtime/test_session_mode_switch.py, tests/unit_tests/server/test_archive_lifecycle.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/channels/web/frontend/src/features/sessionMode/commitSessionMode.ts, jiuwenswarm/channels/web/frontend/src/features/sessionMode/inPlaceModeSwitch.ts, jiuwenswarm/channels/web/frontend/src/App.tsx, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/InputArea.tsx, jiuwenswarm/channels/web/frontend/src/hooks/useWebSocket.ts, jiuwenswarm/channels/web/frontend/src/features/sessionMode/modeSwitchGate.ts, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/index.tsx, jiuwenswarm/channels/web/frontend/src/stores/chatStore.ts, scripts/acceptance/web_mode_switch_bench.py | 无独立 D：无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
+
+<a id="module-16"></a>
 
 ## jiuwenswarm/server/runtime/agent_adapter
 
@@ -139,7 +169,7 @@ generated: true
 | [F_20261027_2015_bilingual-progressive-tool-discovery](jiuwenswarm/agents/harness/common/tools/F_20261027_2015_bilingual-progressive-tool-discovery.md) | F | 中英文渐进式工具发现 | MengHan18 | jiuwenswarm/agents/harness/common/tools, jiuwenswarm/agents/harness/common/rails, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/agents/harness/common/tools/tool_discovery_catalog.py, jiuwenswarm/agents/harness/common/tools/tool_retrieval_toolkits.py, jiuwenswarm/agents/harness/common/rails/tool_retrieval_prompt_rail.py, jiuwenswarm/agents/harness/code/rails/heartbeat_rail.py, jiuwenswarm/agents/harness/team/rails/team_member_skill_toolkit_rail.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/interface_code.py, tests/unit_tests/agentserver/test_tool_discovery_language.py | 无独立 D：针对 Issue 5615 后续扩展的已确认实现，未建立独立仓内设计编号 |
 | [F_20261029_1757_mcp-app-agent-stack-refresh](F_20261029_1757_mcp-app-agent-stack-refresh.md) | F | MCP App 到 Agent 的 stacked PR 更新 | LI Jinyang | jiuwenswarm/channels/web/frontend, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/channels/web/frontend/src/features/mcpApps/mcpAppContext.ts, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/McpAppView.tsx, jiuwenswarm/channels/web/frontend/src/App.tsx, jiuwenswarm/channels/web/frontend/src/hooks/useWebSocket.ts, jiuwenswarm/server/runtime/agent_adapter/user_turn.py | 无独立 D：本次迁移已有 follow-up 实现，不新建方案；需求依据为主仓库 issue 4944 和原 MR !1。 |
 
-<a id="module-14"></a>
+<a id="module-17"></a>
 
 ## scripts
 
@@ -147,7 +177,15 @@ generated: true
 |---|---|---|---|---|---|---|
 | [F_20261111_1528_unified-observability-config](F_20261111_1528_unified-observability-config.md) | F | Team 与单 Agent 可观测性配置统一为 observability 段 | alan_cheng | jiuwenswarm/common, jiuwenswarm/agents/harness, jiuwenswarm/resources, deploy/yuanrong, scripts | jiuwenswarm/common/observability_config.py, jiuwenswarm/common/config.py, jiuwenswarm/agents/harness/agent_observability.py, jiuwenswarm/agents/harness/team/team_manager.py, jiuwenswarm/resources/config.yaml, deploy/yuanrong/conf/gateway-config-yuanrong.template.yaml, scripts/reset_trajectory_data.py, tests/unit_tests/common/test_observability_config.py, tests/unit_tests/agentserver/test_trajectory_runtime_wiring.py | 无独立 D：用户在会话中确认的配置收敛改动，无独立设计编号。 |
 
-<a id="module-15"></a>
+<a id="module-18"></a>
+
+## scripts/acceptance
+
+| ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
+|---|---|---|---|---|---|---|
+| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 与 TUI 共用会话模式切换（mode.set / mode.get） | Yanqing-Shi | jiuwenswarm/agents/harness/team, jiuwenswarm/runtime, jiuwenswarm/server, jiuwenswarm/common, jiuwenswarm/channels/web/frontend, scripts/acceptance | jiuwenswarm/agents/harness/team/team_manager.py, tests/unit_tests/runtime/test_session_mode_switch.py, tests/unit_tests/server/test_archive_lifecycle.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/agent_ws_server.py, jiuwenswarm/channels/web/frontend/src/features/sessionMode/commitSessionMode.ts, jiuwenswarm/channels/web/frontend/src/features/sessionMode/inPlaceModeSwitch.ts, jiuwenswarm/channels/web/frontend/src/App.tsx, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/InputArea.tsx, jiuwenswarm/channels/web/frontend/src/hooks/useWebSocket.ts, jiuwenswarm/channels/web/frontend/src/features/sessionMode/modeSwitchGate.ts, jiuwenswarm/channels/web/frontend/src/components/ChatPanel/index.tsx, jiuwenswarm/channels/web/frontend/src/stores/chatStore.ts, scripts/acceptance/web_mode_switch_bench.py | 无独立 D：无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
+
+<a id="module-19"></a>
 
 ## tests
 
