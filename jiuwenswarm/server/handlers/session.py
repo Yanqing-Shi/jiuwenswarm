@@ -15,7 +15,8 @@ import datetime as _dt
 import logging
 import math
 import sys
-from typing import Any
+from contextlib import AsyncExitStack
+from typing import Any, Awaitable, Callable
 
 from agent_gateway.common.mode_matrix import is_plan_mode, is_team_mode
 from jiuwenswarm.common.schema.agent import AgentResponse, AgentResponseChunk
@@ -903,8 +904,38 @@ async def resolve_rewind_agent(
     return (deep_agent, react_agent)
 
 
+async def _rewind_with_session_ownership(
+    ctx: RequestContext, rewind: Callable[[RequestContext], Awaitable[None]],
+) -> None:
+    """Run a rewind while owning a shared Session, so no run writes its record meanwhile.
+
+    A busy shared Session is refused before anything changes; history and
+    context stay as they were.
+    """
+    from jiuwenswarm.runtime.session.conversation import shared_session_operation
+    from jiuwenswarm.runtime.session.operation_lock import SessionOperationBusyError
+
+    request = ctx.request
+    params = request.params if isinstance(request.params, dict) else {}
+    target_sid = str(params.get("session_id") or request.session_id or "").strip()
+    if not target_sid:
+        await rewind(ctx)
+        return
+    async with AsyncExitStack() as owned:
+        try:
+            await owned.enter_async_context(shared_session_operation(target_sid))
+        except SessionOperationBusyError:
+            await _send_error(ctx, "session is busy", "SESSION_BUSY")
+            return
+        await rewind(ctx)
+
+
 async def handle_session_rewind(ctx: RequestContext) -> None:
     """Full rewind: truncate history.json + context_engine + update checkpointer."""
+    await _rewind_with_session_ownership(ctx, _rewind_session_locked)
+
+
+async def _rewind_session_locked(ctx: RequestContext) -> None:
     request = ctx.request
     services = ctx.services
     restore_files = request.req_method == ReqMethod.SESSION_REWIND_AND_RESTORE
@@ -1104,6 +1135,10 @@ async def handle_session_rewind(ctx: RequestContext) -> None:
 
 async def handle_session_rewind_context(ctx: RequestContext) -> None:
     """Truncate history.json + in-memory context_engine for a session."""
+    await _rewind_with_session_ownership(ctx, _rewind_session_context_locked)
+
+
+async def _rewind_session_context_locked(ctx: RequestContext) -> None:
     request = ctx.request
     services = ctx.services
     from jiuwenswarm.agents.harness.common.session_ops_service import (

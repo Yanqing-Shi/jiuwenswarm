@@ -1871,7 +1871,16 @@ async def _apply_rewound_context(
         )
     else:
         try:
-            session = create_agent_session(session_id=session_id, card=deep_agent.card)
+            from jiuwenswarm.runtime.session.conversation import load_main_binding
+            from openjiuwen.core.session.checkpointer import CheckpointerFactory
+
+            binding = await load_main_binding(session_id)
+            # A shared Session's temporary Session must write the shared record.
+            session_options = (
+                {"conversation_binding": binding, "checkpointer": CheckpointerFactory.get_checkpointer()}
+                if binding is not None else {}
+            )
+            session = create_agent_session(session_id=session_id, card=deep_agent.card, **session_options)
             await session.pre_run(inputs=None)
         except Exception as exc:
             logger.warning("rewind_session_context: pre_run failed for %s: %s", session_id, exc)
@@ -1883,12 +1892,31 @@ async def _apply_rewound_context(
         session_id=session_id,
     )
 
+    from openjiuwen.core.context_engine import ConversationBinding
+
+    get_binding = getattr(session, "get_conversation_binding", None)
+    shared = callable(get_binding) and isinstance(get_binding(), ConversationBinding)
     try:
-        await context_engine.create_context(
-            session=session,
-            processors=_get_context_processors(react_agent),
-            history_messages=context_messages,
-        )
+        if shared:
+            # A bound context ignores history_messages and loads the shared
+            # record. Replace the loaded window and its offload buffer, so the
+            # final save writes the rewound conversation in one commit. The
+            # current record may end in an unfinished tool call; it is replaced.
+            await context_engine.create_context(
+                session=session,
+                processors=_get_context_processors(react_agent),
+                allow_pending_tool_calls=True,
+            )
+            rebuilt = context_engine.get_context(session_id=session_id)
+            state = rebuilt.save_state()
+            state.update(messages=context_messages, offload_messages={})
+            rebuilt.load_state({rebuilt.context_id(): state})
+        else:
+            await context_engine.create_context(
+                session=session,
+                processors=_get_context_processors(react_agent),
+                history_messages=context_messages,
+            )
     except Exception as exc:
         logger.warning("rewind_session_context: create_context failed for %s: %s", session_id, exc)
         return False
@@ -1906,7 +1934,9 @@ async def _apply_rewound_context(
         "(skipped %d streaming/metadata records) persist=%s live_session=%s",
         session_id, turn_index, len(context_messages), skipped, persist_ok, is_live_session,
     )
-    return True
+    # Only the shared record carries the rewind to the next run; without the
+    # write the next model call would still see the rewound turns.
+    return persist_ok if shared else True
 
 
 def _flush_source_state(deep_agent: "DeepAgent", session_id: str) -> None:
