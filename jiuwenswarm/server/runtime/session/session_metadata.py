@@ -185,11 +185,16 @@ def mode_switch_session_visible_to(
     channel_id: str | None,
     user_id: str,
 ) -> bool:
-    """Whether a mode-switch caller may address the Session these metadata describe."""
+    """Whether a mode-switch caller may address the Session these metadata describe.
+
+    Only the recorded owner may. A blank owner is the anonymous user, so it
+    matches only an anonymous caller (the single-user edition); an identified
+    caller cannot address an ownerless Session.
+    """
     if not mode_switch_channel_owns(metadata, channel_id):
         return False
     stored_user_id = str(metadata.get("user_id") or "").strip()
-    return not stored_user_id or stored_user_id == user_id
+    return stored_user_id == str(user_id or "").strip()
 
 
 def session_mode_switch_blocker(metadata: dict[str, Any]) -> str | None:
@@ -1809,10 +1814,9 @@ def sync_session_request_metadata(
             and metadata.get("channel_id", "").strip()
         ):
             metadata["channel_id"] = channel_id
-        # user_id：首次锁定，已锁定则忽略请求值（与 project_id/cron_id 一致不可改）。
-        # 由 envelope.user_id 透传，供 gateway 列表接口按用户隔离会话历史。
-        if user_id and not (isinstance(metadata.get("user_id"), str) and metadata.get("user_id", "").strip()):
-            metadata["user_id"] = user_id
+        # user_id：只在创建时记录（见上方新建分支），已有会话不再由请求补写。
+        # 归属者为空即匿名用户；若在此补写，任意已识别用户发一条消息就能
+        # 成为无归属会话的归属者，绕过 mode.set 的归属校验。
         # last_message_at：仅 chat 轮次刷新。语义为「agent 最后输出时间」，
         # 只读 RPC 无 agent 输出，不应刷新——否则只读查询会把历史会话的排序时间
         # 刷新成「现在」，导致旧会话被置顶。

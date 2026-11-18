@@ -7,6 +7,7 @@
 import { isConversationModelGroupBlocked } from '../multi-session/state/conversationModelSelection';
 import { parseModelSelection } from '../features/settings/modules/models/modelGroupAdapters';
 import { mayProcessingTrueFrameRelight } from '../features/interruptSettleGuard';
+import { promptWaitsForModeSwitch, queueDrainsInMode } from '../features/sessionMode/modeSwitchGate';
 import { isMultiModelCollaborationEnabled } from '../features/multiModelCollaboration/featureConfig';
 import { isRestoredOutputReplay, readOutputOrder } from '../features/sessionOutput';
 import { isEnterprise } from '../edition';
@@ -2076,9 +2077,10 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
    */
   const drainTaskQueueIfIdle = useCallback((sessionId: string) => {
     const currentMode = useSessionStore.getState().getRuntime(sessionId)?.mode;
-    if (currentMode !== 'agent') return;
+    if (!queueDrainsInMode(currentMode)) return;
     const runtime = useChatStore.getState().getRuntime(sessionId);
-    if (runtime?.isProcessing || runtime?.queuePaused) return;
+    // A pending mode switch releases the queue itself once it settles.
+    if (runtime?.isProcessing || runtime?.queuePaused || runtime?.modeSwitchPending) return;
     if (!sendMessageRef.current) return;
     const sessionState = useSessionStore.getState();
     const sessionMetadata = sessionState.currentSession?.session_id === sessionId
@@ -2108,6 +2110,14 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
         assistance_origin: 'none',
       },
     ): Promise<boolean> => {
+      // A prompt must not overtake the mode switch the user made before it:
+      // keep it queued until the switch settles. Steering a queued item waits too.
+      if (promptWaitsForModeSwitch(sessionId, useChatStore.getState().getRuntime(sessionId)?.modeSwitchPending)) {
+        if (options?.queuedTaskId) return false;
+        if (!content.trim() && !mediaItems.length) return false;
+        useChatStore.getState().addToTaskQueue(sessionId, content, mediaItems);
+        return true;
+      }
       if (!options?.queuedTaskId && selectedExpertTeamId(sessionId)) {
         if (!content.trim() && !mediaItems.length) return false;
         try {
@@ -4979,8 +4989,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
             window.dispatchEvent(new CustomEvent('heartbeat-list-refresh', { detail: { sessionId } }));
           }
 
-          // 检查是否有等待的任务队列
-          const currentMode = useSessionStore.getState().getRuntime(sessionId)?.mode;
+          // 检查是否有等待的任务队列（模式判断由 drainTaskQueueIfIdle 统一负责）
           const runtime = useChatStore.getState().getRuntime(sessionId);
           const taskQueue = runtime?.taskQueue ?? [];
           const queuePaused = runtime?.queuePaused ?? false;
@@ -5000,12 +5009,11 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
           }
           if (
             !skipAutoDrain &&
-            currentMode === 'agent' &&
             !resumeAlreadyCompleted &&
             !queuePaused &&
             taskQueue.length > 0
           ) {
-            // 智能执行/单Agent模式下，自动处理队列中的下一个任务
+            // 单 Agent 与 Team 模式下，自动处理队列中的下一个任务
             drainTaskQueueIfIdle(sessionId);
           }
         }
@@ -5373,12 +5381,11 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
               useChatStore.getState().setPaused(sessionId, false);
               useChatStore.getState().setProcessing(sessionId, false);
               useChatStore.getState().setThinking(sessionId, false);
-              // 任务已完成时，检查并触发队列中的下一个任务
-              const currentMode = useSessionStore.getState().getRuntime(sessionId)?.mode;
+              // 任务已完成时，检查并触发队列中的下一个任务（模式判断由 drainTaskQueueIfIdle 负责）
               const runtime = useChatStore.getState().getRuntime(sessionId);
               const taskQueue = runtime?.taskQueue ?? [];
               const queuePaused = runtime?.queuePaused ?? false;
-              if (currentMode === 'agent' && !queuePaused && taskQueue.length > 0) {
+              if (!queuePaused && taskQueue.length > 0) {
                 drainTaskQueueIfIdle(sessionId);
               }
             }

@@ -87,6 +87,7 @@ import {
 import { isPlanWireMode, resolvePlanWireMode, stripPlanSuffix } from './features/planMode/wireMode';
 import { commitSessionMode, type SessionModeCommitOutcome } from './features/sessionMode/commitSessionMode';
 import { canSwitchSessionModeInPlace } from './features/sessionMode/inPlaceModeSwitch';
+import { isPromptSubmitInFlight, queueActionAfterModeCommit } from './features/sessionMode/modeSwitchGate';
 import { getWebTransport } from './utils/env';
 import { queueOrAddGoalObjectiveMessage } from './features/goalPendingObjectiveBubble';
 import {
@@ -3351,16 +3352,19 @@ function AppContent({
     enterNewConversation(mode, options);
   }, [enterNewConversation, mode]);
 
-  // 会话内切换模式：经 mode.set 提交（与 TUI 同一后端入口），以服务端返回的模式为准
+  // 会话内切换模式：经 mode.set 提交（与 TUI 同一后端入口），以服务端返回的模式为准。
+  // Resolves true only when the Session now runs the target mode.
   const sessionModeCommitsRef = useRef<Set<string>>(new Set());
   const switchSessionModeInPlace = useCallback(async (
     targetSessionId: string,
     currentMode: AgentMode,
     targetMode: AgentMode,
-  ) => {
+  ): Promise<boolean> => {
     const inFlight = sessionModeCommitsRef.current;
-    if (inFlight.has(targetSessionId)) return;
+    if (inFlight.has(targetSessionId)) return false;
     inFlight.add(targetSessionId);
+    // Prompts submitted from now on wait in the queue until the switch settles.
+    useChatStore.getState().setModeSwitchPending(targetSessionId, true);
     let outcome: SessionModeCommitOutcome;
     try {
       outcome = await commitSessionMode(request, {
@@ -3370,13 +3374,23 @@ function AppContent({
       });
     } finally {
       inFlight.delete(targetSessionId);
+      useChatStore.getState().setModeSwitchPending(targetSessionId, false);
     }
     if (outcome.status === 'committed' || outcome.status === 'not_applied') {
       const committedMode = stripPlanSuffix(outcome.mode) as AgentMode;
       setMode(targetSessionId, committedMode);
       useSessionStore.getState().updateSession(targetSessionId, { mode: committedMode });
-      if (outcome.status === 'committed') return;
+      // The sidebar reopens a Session with this list's mode.
+      useWorkspaceStore.getState().patchSession(targetSessionId, { mode: committedMode });
     }
+    const queueAction = queueActionAfterModeCommit(
+      outcome.status,
+      useChatStore.getState().getRuntime(targetSessionId)?.taskQueue.length ?? 0,
+    );
+    if (queueAction === 'drain') drainTaskQueueIfIdle(targetSessionId);
+    // Prompts that waited for a switch that did not happen are not sent in the old mode.
+    if (queueAction === 'pause') useChatStore.getState().setQueuePaused(targetSessionId, true);
+    if (outcome.status === 'committed') return true;
     const content = outcome.status === 'not_applied'
       ? t('chat.sessionModeSwitch.conflict')
       : outcome.status === 'busy'
@@ -3392,17 +3406,22 @@ function AppContent({
       testId: 'app-session-mode-switch-toast',
       dataVariant: outcome.status,
     });
-  }, [request, setMode, t]);
+    return false;
+  }, [drainTaskQueueIfIdle, request, setMode, t]);
 
-  // 切换模式
-  const handleSwitchMode = useCallback((targetMode: AgentMode) => {
+  // 切换模式。Resolves true only when the current Session itself switched (a draft,
+  // or a saved Session whose mode.set committed); opening a fresh conversation or a
+  // refused switch leaves this Session, and its draft, as they were.
+  const handleSwitchMode = useCallback(async (targetMode: AgentMode): Promise<boolean> => {
     const currentId = sessionIdRef.current;
-    if (useChatStore.getState().getRuntime(currentId)?.isProcessing) return;
+    const chatRuntime = useChatStore.getState().getRuntime(currentId);
+    // A prompt already sent (including one still being prepared) keeps the mode it was sent in.
+    if (chatRuntime?.isProcessing || chatRuntime?.modeSwitchPending || isPromptSubmitInFlight(currentId)) return false;
     const currentSessionRuntime = useSessionStore.getState().getRuntime(currentId);
-    if ((currentSessionRuntime?.agentGroupBinding || currentSessionRuntime?.agentGroupBindingPending) && targetMode !== 'team') return;
+    if ((currentSessionRuntime?.agentGroupBinding || currentSessionRuntime?.agentGroupBindingPending) && targetMode !== 'team') return false;
     if (currentId === NEW_CONVERSATION_ID) {
       setMode(NEW_CONVERSATION_ID, targetMode);
-      return;
+      return true;
     }
     const currentMode = currentSessionRuntime?.mode;
     const inPlace = canSwitchSessionModeInPlace(
@@ -3411,10 +3430,10 @@ function AppContent({
       targetMode,
     );
     if (inPlace && currentMode) {
-      void switchSessionModeInPlace(currentId, currentMode, targetMode);
-      return;
+      return switchSessionModeInPlace(currentId, currentMode, targetMode);
     }
     enterNewConversation(targetMode);
+    return false;
   }, [enterNewConversation, setMode, switchSessionModeInPlace]);
 
   const handleSessionInputIntent = useCallback((targetSessionId: string) => {
@@ -3921,7 +3940,7 @@ function AppContent({
   useEffect(() => setMcpAppMessageHandler(async (targetSessionId, content) => {
     if (!targetSessionId || targetSessionId === NEW_CONVERSATION_ID) return false;
     const runtime = useChatStore.getState().getRuntime(targetSessionId);
-    if (runtime?.isProcessing || runtime?.queuePaused) return false;
+    if (runtime?.isProcessing || runtime?.queuePaused || runtime?.modeSwitchPending) return false;
     return sendMessage(content, targetSessionId);
   }), [sendMessage]);
 
@@ -3940,6 +3959,12 @@ function AppContent({
     // （paused/blocked/completed/无目标）下，停止只结束会话，不碰目标本身。
     const isGoalActive = useGoalStore.getState().runtimes[currentSessionId]?.goal?.status === 'active';
     if (mode === 'team') {
+      // Stop must not let the queue send its next prompt: the stopped round
+      // ends with an ordinary processing_status(false).
+      const runtime = useChatStore.getState().getRuntime(currentSessionId);
+      if (runtime && runtime.taskQueue.length > 0) {
+        useChatStore.getState().setQueuePaused(currentSessionId, true);
+      }
       if (organizationOwnerStopTarget(currentSessionId)) {
         void cancel(currentSessionId);
       } else {
