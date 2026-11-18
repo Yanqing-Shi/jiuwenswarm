@@ -125,8 +125,13 @@ export async function commitSessionMode(
   try {
     return settle(input, await requestModeSet(request, input));
   } catch (retryError) {
-    // Busy is decided before any commit, so this refusal settles both attempts.
-    if (sessionModeErrorCode(retryError) === 'SESSION_BUSY') return { status: 'busy' };
+    if (sessionModeErrorCode(retryError) === 'SESSION_BUSY') {
+      // Busy refuses only the retry: the first attempt may have committed before
+      // another operation took the Session. A read-back still on another mode
+      // means nothing was committed, which is reported as busy, not as a conflict.
+      const outcome = await readBack(request, input);
+      return outcome.status === 'not_applied' ? { status: 'busy' } : outcome;
+    }
     return readBack(request, input);
   }
 }

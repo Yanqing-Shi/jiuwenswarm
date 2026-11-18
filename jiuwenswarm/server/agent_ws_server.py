@@ -6126,9 +6126,11 @@ class AgentWebSocketServer:
             if not session_id or str(params.get("session_id") or "").strip() != session_id:
                 raise SessionModeSwitchError("session_id is required", code="BAD_REQUEST")
             if commit:
+                # A switch names the mode it replaces, so a client acting on a
+                # stale view gets MODE_CONFLICT instead of overwriting silently.
                 expected_mode = params.get("expected_mode")
-                if expected_mode is not None and not isinstance(expected_mode, str):
-                    raise SessionModeSwitchError("expected_mode must be a string", code="BAD_REQUEST")
+                if not isinstance(expected_mode, str) or not expected_mode.strip():
+                    raise SessionModeSwitchError("expected_mode is required", code="BAD_REQUEST")
                 mode = params.get("mode")
                 if not isinstance(mode, str):
                     raise SessionModeSwitchError("mode is required", code="BAD_REQUEST")
