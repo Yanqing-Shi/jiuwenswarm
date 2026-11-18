@@ -515,3 +515,275 @@ async def test_shared_refresh_failure_keeps_the_original_approval_retryable(shar
     assert result.ok
     assert h.executions == [{"value": "once"}]
     assert len(h.script.calls) == 2
+
+
+# --- Rewinding a shared Session -------------------------------------------------
+
+_TURNS = [("first", "one"), ("second", "two"), ("third", "three")]
+
+
+def _turn_records(turns):
+    records = []
+    for index, (question, answer) in enumerate(turns, start=1):
+        records.append({"role": "user", "id": f"u{index}", "request_id": f"r{index}",
+                        "content": question, "timestamp": float(index)})
+        records.append({"role": "assistant", "content": answer, "request_id": f"r{index}",
+                        "event_type": "chat.final", "timestamp": index + 0.5})
+    return records
+
+
+def _write_history(sid, turns):
+    import json
+
+    path = session_history.get_read_history_path(sid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(record) + "\n" for record in _turn_records(turns)), encoding="utf-8")
+    return path
+
+
+async def _three_turn_record(env):
+    messages = [message for question, answer in _TURNS
+                for message in (UserMessage(content=question), AssistantMessage(content=answer))]
+    await env.binding.store.commit(env.binding.key, ConversationSnapshot(messages=messages))
+
+
+async def _record_contents(env):
+    return [message.content for message in (await env.binding.store.read(env.binding.key)).messages]
+
+
+@pytest.fixture
+def rewind_history(shared_runtime, monkeypatch):
+    sessions = shared_runtime.root / "agent" / "sessions"
+    monkeypatch.setattr("jiuwenswarm.agents.harness.common.session_ops_service.get_agent_sessions_dir",
+                        lambda: sessions)
+    return shared_runtime
+
+
+@pytest.mark.asyncio
+async def test_rewind_replaces_the_shared_record_that_the_next_turn_reads(rewind_history, monkeypatch):
+    from jiuwenswarm.agents.harness.common.session_ops_service import rewind_session_context
+    from jiuwenswarm.common.schema.agent import AgentRequest
+    from jiuwenswarm.common.schema.message import ReqMethod
+
+    env = rewind_history
+    llm, requests = model(monkeypatch)
+    adapter = JiuWenSwarmDeepAdapter()
+    adapter._is_session_scoped_adapter = True
+    adapter._instance = create_deep_agent(model=llm, card=AgentCard(id="main", name="main"),
+                                         system_prompt="rules", enable_task_loop=False,
+                                         enable_read_image_multimodal=False)
+    try:
+        await adapter.start_interaction(env.sid)
+        await _three_turn_record(env)
+        _write_history(env.sid, _TURNS[:1])  # the caller has already truncated the history
+        assert await rewind_session_context(deep_agent=adapter._instance, session_id=env.sid, turn_index=1)
+        contents = await _record_contents(env)
+        assert contents[:2] == ["first", "one"]
+        assert not {"second", "two", "third", "three"} & set(contents)
+
+        request = AgentRequest(request_id="B", session_id=env.sid, channel_id="tui", req_method=ReqMethod.CHAT_SEND,
+                               params={"mode": "agent.work.normal", "query": "B"})
+        async with adapter._conversation_request_admission(request):
+            await adapter._instance.invoke({"query": "B"}, adapter._instance.loop_session)
+        seen = [m.content for m in requests[-1] if m.role != "system"]
+        assert seen[:2] == ["first", "one"] and seen[-1] == "B"
+        assert not {"second", "two", "third", "three"} & set(seen)
+    finally:
+        await adapter._instance.stop()
+
+
+@pytest.mark.asyncio
+async def test_rewind_reports_failure_when_the_shared_record_is_not_written(rewind_history, monkeypatch):
+    from jiuwenswarm.agents.harness.common.session_ops_service import rewind_session_context
+
+    env = rewind_history
+    llm, _requests = model(monkeypatch)
+    adapter = JiuWenSwarmDeepAdapter()
+    adapter._is_session_scoped_adapter = True
+    adapter._instance = create_deep_agent(model=llm, card=AgentCard(id="main", name="main"),
+                                         system_prompt="rules", enable_task_loop=False,
+                                         enable_read_image_multimodal=False)
+    try:
+        await adapter.start_interaction(env.sid)
+        await _three_turn_record(env)
+        _write_history(env.sid, _TURNS[:1])
+        monkeypatch.setattr(env.binding.store, "commit", AsyncMock(side_effect=OSError("store unavailable")))
+        assert not await rewind_session_context(deep_agent=adapter._instance, session_id=env.sid, turn_index=1)
+    finally:
+        await adapter._instance.stop()
+
+
+@pytest.mark.asyncio
+async def test_rewind_without_a_live_session_still_replaces_the_shared_record(rewind_history, monkeypatch):
+    from jiuwenswarm.agents.harness.common.session_ops_service import rewind_session_context
+
+    env = rewind_history
+    llm, _requests = model(monkeypatch)
+    agent = create_deep_agent(model=llm, card=AgentCard(id="root", name="root"), system_prompt="rules",
+                              enable_task_loop=False, enable_read_image_multimodal=False)
+    await agent.ensure_initialized()
+    await _three_turn_record(env)
+    _write_history(env.sid, _TURNS[:1])
+    assert await rewind_session_context(deep_agent=agent, session_id=env.sid, turn_index=1)
+    contents = await _record_contents(env)
+    assert contents[:2] == ["first", "one"]
+    assert not {"second", "two", "third", "three"} & set(contents)
+
+
+@pytest.mark.asyncio
+async def test_shared_session_operation_owns_only_a_shared_session(shared_runtime):
+    from jiuwenswarm.runtime.session.conversation import shared_session_operation
+    from jiuwenswarm.runtime.session.operation_lock import SessionOperationBusyError, acquire_operation
+
+    env = shared_runtime
+    async with shared_session_operation(env.sid):
+        with pytest.raises(SessionOperationBusyError):
+            acquire_operation("session", env.sid)
+    acquire_operation("session", env.sid).close()
+
+    session_metadata.init_session_metadata(session_id="legacy-rewind", channel_id="tui", mode="agent.work.normal")
+    async with shared_session_operation("legacy-rewind"):
+        acquire_operation("session", "legacy-rewind").close()
+
+
+def _rewind_request(sid, method):
+    from jiuwenswarm.common.schema.agent import AgentRequest
+
+    return AgentRequest(request_id="rewind-1", channel_id="tui", session_id=sid, req_method=method,
+                        params={"session_id": sid, "turn_index": 1})
+
+
+async def _http_rewind(handler, request):
+    from jiuwenswarm.server.context import AgentServerServices, RequestContext
+
+    responses = []
+
+    class _Sink:
+        async def send_response(self, response):
+            responses.append(response)
+
+        async def send_chunk(self, chunk, *, sequence):
+            return True
+
+    services = AgentServerServices(SimpleNamespace(_agent_manager=SimpleNamespace(agents={})))
+    await handler(RequestContext(request=request, sink=_Sink(), connection_id="1", services=services))
+    return responses
+
+
+async def _ws_rewind(method_name, request, monkeypatch):
+    from jiuwenswarm.server import agent_ws_server
+
+    responses = []
+
+    async def send_wire(_ws, payload):
+        responses.append(payload)
+
+    monkeypatch.setattr(agent_ws_server, "send_wire_payload", send_wire)
+    monkeypatch.setattr(agent_ws_server, "encode_agent_response_for_wire",
+                        lambda response, response_id=None: response)
+    server = object.__new__(agent_ws_server.AgentWebSocketServer)
+    await getattr(server, method_name)(None, request, asyncio.Lock())
+    return responses
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["http_full", "http_context", "ws_full", "ws_context"])
+async def test_rewind_of_a_busy_shared_session_changes_nothing(rewind_history, monkeypatch, entry):
+    from jiuwenswarm.common.schema.message import ReqMethod
+    from jiuwenswarm.runtime.session.operation_lock import acquire_operation
+    from jiuwenswarm.server.handlers import session as handlers
+
+    env = rewind_history
+    path = _write_history(env.sid, _TURNS)
+    before = path.read_bytes()
+    method = ReqMethod.SESSION_REWIND if entry.endswith("full") else ReqMethod.SESSION_REWIND_CONTEXT
+    request = _rewind_request(env.sid, method)
+    with acquire_operation("session", env.sid):
+        if entry == "http_full":
+            responses = await _http_rewind(handlers.handle_session_rewind, request)
+        elif entry == "http_context":
+            responses = await _http_rewind(handlers.handle_session_rewind_context, request)
+        elif entry == "ws_full":
+            responses = await _ws_rewind("_handle_session_rewind_full", request, monkeypatch)
+        else:
+            responses = await _ws_rewind("_handle_session_rewind_context", request, monkeypatch)
+    assert len(responses) == 1
+    assert responses[0].ok is False
+    assert responses[0].payload["code"] == "SESSION_BUSY"
+    assert path.read_bytes() == before
+
+
+# --- Leader ownership that no round will release --------------------------------
+
+async def _started_shared_leader(env, monkeypatch):
+    from openjiuwen.agent_teams.harness import NativeHarness, TeamHarness, bind_leader_preparation
+    from openjiuwen.agent_teams.schema.team import TeamRole
+    from openjiuwen.core.session.agent_team import create_agent_team_session
+    from openjiuwen.harness.schema.deep_agent_spec import DeepAgentSpec, TeamModelConfig
+    from jiuwenswarm.runtime.context import set_runtime_context
+    from jiuwenswarm.runtime.service import AgentRuntime
+    from jiuwenswarm.runtime.session.conversation import prepare_shared_leader
+    from tests.unit_tests.runtime.test_runtime_service import FakeAgentManager
+
+    session_metadata.patch_session_metadata(env.sid, {"mode": "team.work.normal"})
+    llm, requests = model(monkeypatch)
+    spec = DeepAgentSpec(model=TeamModelConfig(model_client_config=llm.model_client_config,
+                                               model_request_config=llm.model_config),
+                         enable_security_rail=False, enable_sys_operation=False, enable_read_image_multimodal=False)
+    monkeypatch.setattr(Model, "invoke", lambda self, *args, **kwargs: llm.invoke(*args, **kwargs))
+    monkeypatch.setattr(Model, "stream", lambda self, *args, **kwargs: llm.stream(*args, **kwargs))
+    native = NativeHarness(spec)
+    harness = TeamHarness(spec, None, native, role=TeamRole.LEADER, member_name="actual-chief")
+    team_session = create_agent_team_session(session_id=env.sid, conversation_binding=env.binding,
+                                             checkpointer=env.checkpointer)
+    await team_session.pre_run()
+    runtime = AgentRuntime(agent_manager=FakeAgentManager(), initializer=AsyncMock())
+    await runtime.start()
+    await runtime._session_coordinator.register_session(env.sid, "tui")
+    token = set_runtime_context(runtime, runtime.agent_manager)
+    with bind_leader_preparation(prepare_shared_leader):
+        await harness.start(team_session=team_session)
+    return SimpleNamespace(native=native, harness=harness, runtime=runtime, token=token, requests=requests)
+
+
+async def _stop_shared_leader(leader):
+    from jiuwenswarm.runtime.context import reset_runtime_context
+
+    reset_runtime_context(leader.token)
+    await leader.harness.stop()
+    await leader.runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_idle_leader_resume_without_query_leaves_the_session_free(shared_runtime, monkeypatch):
+    from openjiuwen.agent_teams.harness import HarnessState
+    from jiuwenswarm.runtime.session.operation_lock import acquire_operation
+
+    env = shared_runtime
+    leader = await _started_shared_leader(env, monkeypatch)
+    try:
+        await leader.native.send("first Leader turn")
+        async with asyncio.timeout(5):
+            while leader.native.state is not HarnessState.IDLE:
+                await asyncio.sleep(0.01)
+        await leader.native.resume()
+        assert leader.native.state is HarnessState.IDLE
+        acquire_operation("session", env.sid).close()
+    finally:
+        await _stop_shared_leader(leader)
+
+
+@pytest.mark.asyncio
+async def test_leader_admission_for_work_that_never_starts_is_returned(shared_runtime, monkeypatch):
+    from jiuwenswarm.runtime.session.operation_lock import SessionOperationBusyError, acquire_operation
+
+    env = shared_runtime
+    leader = await _started_shared_leader(env, monkeypatch)
+    try:
+        leader.native.check_conversation_admission()
+        with pytest.raises(SessionOperationBusyError):
+            acquire_operation("session", env.sid)
+        leader.native.release_conversation_admission()
+        acquire_operation("session", env.sid).close()
+    finally:
+        await _stop_shared_leader(leader)
