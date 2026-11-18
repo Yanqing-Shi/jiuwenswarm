@@ -721,6 +721,10 @@ def test_team_history_filter_still_reads_the_record_mode():
     }),
     (ReqMethod.MODE_SET, "web", {"session_id": "other-session", "mode": "agent.work.normal"}),
     (ReqMethod.MODE_SET, "web", {"session_id": "one-session"}),
+    # A switch must name the mode it expects to replace; a blind overwrite is refused.
+    (ReqMethod.MODE_SET, "web", {"session_id": "one-session", "mode": "team.work.normal"}),
+    (ReqMethod.MODE_SET, "tui", {"session_id": "one-session", "mode": "team.work.normal", "expected_mode": None}),
+    (ReqMethod.MODE_SET, "web", {"session_id": "one-session", "mode": "team.work.normal", "expected_mode": " "}),
 ])
 async def test_mode_handlers_reject_foreign_channel_and_malformed_params(
     monkeypatch, method, channel_id, params,
@@ -758,3 +762,168 @@ async def test_mode_handlers_reject_foreign_channel_and_malformed_params(
     assert len(responses) == 1
     assert responses[0].ok is False
     assert responses[0].payload["code"] == "BAD_REQUEST"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_conflicting_mode_sets_commit_one_and_refuse_the_other(
+    mode_session, session_channel, monkeypatch,
+):
+    """Two tabs switch one Session at once from the same view: one commits, the stale one conflicts."""
+    from jiuwenswarm.server import agent_ws_server
+
+    monkeypatch.setattr(session_history, "append_session_mode_changed", lambda **item: None)
+    runtime = AgentRuntime(agent_manager=AsyncMock(), initializer=AsyncMock())
+    responses = []
+
+    async def send_wire(_ws, payload):
+        responses.append(payload)
+
+    server = object.__new__(agent_ws_server.AgentWebSocketServer)
+    server._mode_request_locks = WeakValueDictionary()
+    monkeypatch.setattr(server, "_execution_runtime", lambda: runtime)
+    monkeypatch.setattr(agent_ws_server, "send_wire_payload", send_wire)
+    monkeypatch.setattr(
+        agent_ws_server, "encode_agent_response_for_wire",
+        lambda response, response_id=None: response,
+    )
+
+    def request(request_id, target):
+        return AgentRequest(
+            request_id=request_id,
+            channel_id=session_channel,
+            session_id="one-session",
+            user_id="user-1",
+            req_method=ReqMethod.MODE_SET,
+            params={"session_id": "one-session", "mode": target, "expected_mode": "agent.code.normal"},
+        )
+
+    _, revision_before = _persisted_mode()
+    send_lock = asyncio.Lock()
+    try:
+        await asyncio.wait_for(asyncio.gather(
+            server._handle_mode_set(None, request("tab-a", "team.work.normal"), send_lock),
+            server._handle_mode_set(None, request("tab-b", "agent.work.normal"), send_lock),
+        ), timeout=5)
+    finally:
+        await runtime.close()
+
+    committed = [response for response in responses if response.ok]
+    refused = [response for response in responses if not response.ok]
+    assert len(committed) == 1 and len(refused) == 1
+    assert refused[0].payload["code"] == "MODE_CONFLICT"
+    mode, revision = _persisted_mode()
+    assert mode == committed[0].payload["mode"]
+    assert session_metadata._mode_revision(revision) == session_metadata._mode_revision(revision_before) + 1
+
+
+@pytest.mark.parametrize("target", ["team.design", "team", "agent.work", "agent.work.bogus", ""])
+def test_mode_set_refuses_a_target_that_is_not_a_canonical_switchable_mode(mode_session, session_channel, target):
+    runtime = AgentRuntime(agent_manager=AsyncMock(), initializer=AsyncMock())
+    before = _persisted_mode()
+    with pytest.raises(SessionModeSwitchError) as refused:
+        _switch(runtime, session_channel, target, "agent.code.normal")
+    assert refused.value.code == "BAD_REQUEST"
+    assert _persisted_mode() == before
+
+
+def test_mode_requests_for_an_unknown_session_are_not_found(mode_session, session_channel):
+    runtime = AgentRuntime(agent_manager=AsyncMock(), initializer=AsyncMock())
+    with pytest.raises(SessionModeSwitchError) as switch:
+        runtime.switch_session_mode(
+            session_id="no-such-session", target_mode="team.work.normal", expected_mode="agent.code.normal",
+            channel_id=session_channel, user_id="user-1",
+        )
+    assert switch.value.code == "NOT_FOUND"
+    with pytest.raises(SessionModeSwitchError) as read:
+        AgentRuntime.get_session_mode(session_id="no-such-session", channel_id=session_channel, user_id="user-1")
+    assert read.value.code == "NOT_FOUND"
+
+
+# --- Only the recorded owner may switch; a blank owner is the anonymous user ------
+
+def _set_stored_owner(owner):
+    metadata_path = session_metadata.get_agent_sessions_dir() / "one-session" / "metadata.json"
+    stored = json.loads(metadata_path.read_text(encoding="utf-8"))
+    stored["user_id"] = owner
+    metadata_path.write_text(json.dumps(stored), encoding="utf-8")
+    session_metadata.remove_session_metadata_cache("one-session")
+
+
+def _stored_owner():
+    metadata_path = session_metadata.get_agent_sessions_dir() / "one-session" / "metadata.json"
+    return json.loads(metadata_path.read_text(encoding="utf-8")).get("user_id")
+
+
+@pytest.mark.parametrize("stored, caller, visible", [
+    ("user-1", "user-1", True),
+    ("user-1", "user-2", False),
+    ("user-1", "", False),
+    ("", "", True),
+    (None, "", True),
+    ("", "user-1", False),
+    (" ", "user-1", False),
+])
+def test_mode_switch_caller_must_be_the_recorded_owner(session_channel, stored, caller, visible):
+    """A blank owner is the anonymous user: only an anonymous caller (the single-user edition) matches it."""
+    metadata = {"channel_id": session_channel, "user_id": stored}
+    assert session_metadata.mode_switch_session_visible_to(
+        metadata, channel_id=session_channel, user_id=caller,
+    ) is visible
+
+
+def test_identified_caller_cannot_switch_or_read_an_ownerless_session(mode_session, session_channel, monkeypatch):
+    monkeypatch.setattr(session_history, "append_session_mode_changed", lambda **item: None)
+    _set_stored_owner("")
+    runtime = AgentRuntime(agent_manager=AsyncMock(), initializer=AsyncMock())
+
+    with pytest.raises(SessionModeSwitchError) as switch:
+        _switch(runtime, session_channel, "team.work.normal", "agent.code.normal", user_id="user-1")
+    assert switch.value.code == "NOT_FOUND"
+    with pytest.raises(SessionModeSwitchError) as read:
+        _get_mode(session_channel, user_id="user-1")
+    assert read.value.code == "NOT_FOUND"
+    assert _persisted_mode()[0] == "agent.code.normal"
+
+    # The single-user edition's anonymous caller still owns its own Sessions.
+    switched = _switch(runtime, session_channel, "team.work.normal", "agent.code.normal", user_id="")
+    assert switched["mode"] == "team.work.normal"
+    assert _get_mode(session_channel, user_id="")["mode"] == "team.work.normal"
+
+
+def test_a_prompt_from_an_identified_user_does_not_claim_an_ownerless_session(
+    mode_session, session_channel, monkeypatch,
+):
+    """Owners are fixed at creation; a prompt cannot grant what mode.set would have refused."""
+    from jiuwenswarm.runtime.request import sync_chat_request_metadata
+
+    monkeypatch.setattr(session_history, "append_session_mode_changed", lambda **item: None)
+    _set_stored_owner("")
+    prompt = AgentRequest(
+        request_id="claim-1", channel_id=session_channel, session_id="one-session", user_id="user-2",
+        req_method=ReqMethod.CHAT_SEND, params={"query": "hello"},
+    )
+    sync_chat_request_metadata(prompt, None, "agent.code.normal", user_id="user-2")
+    session_metadata.flush_pending_writes()
+    assert _stored_owner() == ""
+
+    runtime = AgentRuntime(agent_manager=AsyncMock(), initializer=AsyncMock())
+    with pytest.raises(SessionModeSwitchError) as switch:
+        _switch(runtime, session_channel, "team.work.normal", "agent.code.normal", user_id="user-2")
+    assert switch.value.code == "NOT_FOUND"
+
+
+def test_a_session_created_by_a_request_still_records_its_owner(mode_session, session_channel):
+    """The request sync's own creation path keeps recording the creator."""
+    from jiuwenswarm.runtime.request import sync_chat_request_metadata
+
+    prompt = AgentRequest(
+        request_id="create-1", channel_id=session_channel, session_id="fresh-session", user_id="user-2",
+        req_method=ReqMethod.CHAT_SEND, params={"query": "hello"},
+    )
+    try:
+        sync_chat_request_metadata(prompt, None, "agent.code.normal", user_id="user-2")
+        session_metadata.flush_pending_writes()
+        stored = session_metadata.get_session_metadata("fresh-session", cache_bust=True, enable_writeback=False)
+        assert stored["user_id"] == "user-2"
+    finally:
+        session_metadata.remove_session_metadata_cache("fresh-session")

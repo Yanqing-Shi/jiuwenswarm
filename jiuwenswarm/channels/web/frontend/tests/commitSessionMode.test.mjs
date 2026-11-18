@@ -66,12 +66,37 @@ test('a lost reply retries once; an already-applied target settles as committed'
   assert.deepEqual(calls.map((call) => call.method), ['mode.set', 'mode.set']);
 });
 
-test('a busy retry after a lost reply settles both attempts as busy', async () => {
+test('a busy retry after a lost reply reads the mode back; still the old mode is busy', async () => {
+  const { request, calls } = scriptedRequest([
+    { error: codedError('WS_DISCONNECTED') },
+    { error: codedError('SESSION_BUSY') },
+    { payload: { mode: 'agent.work.normal' } },
+  ]);
+  assert.deepEqual(await commitSessionMode(request, INPUT), { status: 'busy' });
+  assert.deepEqual(calls.map((call) => call.method), ['mode.set', 'mode.set', 'mode.get']);
+});
+
+test('a busy retry after a lost reply settles as committed when the first attempt landed', async () => {
+  // The first mode.set committed, then a prompt took the Session before the retry.
+  const { request } = scriptedRequest([
+    { error: codedError('REQUEST_TIMEOUT') },
+    { error: codedError('SESSION_BUSY') },
+    { payload: { mode: 'team.work.normal' } },
+  ]);
+  assert.deepEqual(
+    await commitSessionMode(request, INPUT),
+    { status: 'committed', mode: 'team.work.normal', changed: false },
+  );
+});
+
+test('a busy retry whose read-back also fails is uncertain', async () => {
+  const readError = codedError('REQUEST_TIMEOUT');
   const { request } = scriptedRequest([
     { error: codedError('WS_DISCONNECTED') },
     { error: codedError('SESSION_BUSY') },
+    { error: readError },
   ]);
-  assert.deepEqual(await commitSessionMode(request, INPUT), { status: 'busy' });
+  assert.deepEqual(await commitSessionMode(request, INPUT), { status: 'uncertain', error: readError });
 });
 
 test('two lost replies fall back to mode.get', async () => {
