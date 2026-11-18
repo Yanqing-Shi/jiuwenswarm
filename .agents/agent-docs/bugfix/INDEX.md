@@ -19,6 +19,7 @@ generated: true
 | [gateway/channel_manager/web](#module-gateway-channel_manager-web) |
 | [jiuwenswarm](#module-jiuwenswarm) |
 | [jiuwenswarm/agents/harness/code/rails/heartbeat](#module-jiuwenswarm-agents-harness-code-rails-heartbeat) |
+| [jiuwenswarm/agents/harness/common](#module-jiuwenswarm-agents-harness-common) |
 | [jiuwenswarm/agents/harness/common/rails](#module-jiuwenswarm-agents-harness-common-rails) |
 | [jiuwenswarm/agents/harness/common/rsi](#module-jiuwenswarm-agents-harness-common-rsi) |
 | [jiuwenswarm/agents/harness/common/tools/cron](#module-jiuwenswarm-agents-harness-common-tools-cron) |
@@ -39,6 +40,7 @@ generated: true
 | [jiuwenswarm/resources/agent/workspace/skills/workswarm-builtin](#module-jiuwenswarm-resources-agent-workspace-skills-workswarm-builtin) |
 | [jiuwenswarm/resources/agent/workspace/skills/workswarm-builtin/references/capabilities/workswarm-app-builder](#module-jiuwenswarm-resources-agent-workspace-skills-workswarm-builtin-references-capabilities-workswarm-app-builder) |
 | [jiuwenswarm/runtime](#module-jiuwenswarm-runtime) |
+| [jiuwenswarm/runtime/session](#module-jiuwenswarm-runtime-session) |
 | [jiuwenswarm/server](#module-jiuwenswarm-server) |
 | [jiuwenswarm/server/control](#module-jiuwenswarm-server-control) |
 | [jiuwenswarm/server/ipc](#module-jiuwenswarm-server-ipc) |
@@ -98,6 +100,14 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
 | [B_20261027_1553_reminder-tool-routing](jiuwenswarm/agents/harness/common/tools/cron/B_20261027_1553_reminder-tool-routing.md) | B | Code 模式中文提醒错误路由到 heartbeat | MengHan18 | 无独立 D：针对 Issue 5615 的局部工具选路缺陷修复，无独立设计。 |
+
+<a id="module-jiuwenswarm-agents-harness-common"></a>
+
+## jiuwenswarm/agents/harness/common
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [B_20261118_0610_shared-session-rewind-and-leader-ownership](runtime/B_20261118_0610_shared-session-rewind-and-leader-ownership.md) | B | 共享会话回退写回共享记录，Leader 交还未用的会话操作 | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）的 P1 问题修复；依据本地集成的共享会话与会话操作锁实现，无独立 D。 |
 
 <a id="module-jiuwenswarm-agents-harness-common-rails"></a>
 
@@ -292,6 +302,14 @@ generated: true
 | [B_20261117_0452_team-attach-subscription-inflight](jiuwenswarm/server/B_20261117_0452_team-attach-subscription-inflight.md) | B | Team 旁听订阅被记为在途请求，导致会话一直忙碌、无法从 Team 切回 Agent | 待确认 | 无独立 D：修复既有忙碌判定对旁听订阅的误判，不改变 mode.set 与归档的契约，无独立设计。关联实施记录见 F_20261116_1710_web-session-mode-switch。 |
 | [B_20261120_0927_unknown-answer-source-hang](jiuwenswarm/runtime/B_20261120_0927_unknown-answer-source-hang.md) | B | 未知 source 的 answers 请求在团队会话中排队死锁、无终止帧 | openjiuwen_ai | 无独立 D：仅收紧既有 chat.send answers 校验的适用条件，不改变交互恢复协议、source 白名单与会话 lane 语义；无独立设计。 |
 
+<a id="module-jiuwenswarm-runtime-session"></a>
+
+## jiuwenswarm/runtime/session
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [B_20261118_0610_shared-session-rewind-and-leader-ownership](runtime/B_20261118_0610_shared-session-rewind-and-leader-ownership.md) | B | 共享会话回退写回共享记录，Leader 交还未用的会话操作 | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）的 P1 问题修复；依据本地集成的共享会话与会话操作锁实现，无独立 D。 |
+
 <a id="module-jiuwenswarm-server"></a>
 
 ## jiuwenswarm/server
@@ -301,6 +319,7 @@ generated: true
 | [B_20261029_0927_missing-supervisor-entry](jiuwenswarm/server/B_20261029_0927_missing-supervisor-entry.md) | B | 重启 AgentServer 时缺少 supervisor 启动函数 | xinyang_bali | 无独立 D：用户请求重启时发现当前工作区入口不完整，恢复既有 Front/Worker 启动契约。 |
 | [B_20261031_1042_pr9317-review](jiuwenswarm/server/B_20261031_1042_pr9317-review.md) | B | PR 9317 插件模式校验与 Front 遗留启动链清理 | xinyang_bali | 无独立 D：根据 openJiuwen-bot 检视意见清理现有实现，不引入新接口或架构方案，无独立 D。 |
 | [B_20261116_1540_interrupt-intent-contract](jiuwenswarm/server/B_20261116_1540_interrupt-intent-contract.md) | B | chat.interrupt 未知 intent 静默假成功：WS/HTTP 双入口统一契约校验 | ZHANGPP_ | 无独立 D：依据联调现场与 PR 检视意见定位，无独立设计文档；修复限定 intent 契约校验范围，并补回归测试。 |
+| [B_20261118_0610_shared-session-rewind-and-leader-ownership](runtime/B_20261118_0610_shared-session-rewind-and-leader-ownership.md) | B | 共享会话回退写回共享记录，Leader 交还未用的会话操作 | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）的 P1 问题修复；依据本地集成的共享会话与会话操作锁实现，无独立 D。 |
 
 <a id="module-jiuwenswarm-server-control"></a>
 
