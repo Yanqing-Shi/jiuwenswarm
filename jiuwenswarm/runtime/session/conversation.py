@@ -1,7 +1,8 @@
 """Host assembly of a product Session's fixed shared conversation slot."""
 from __future__ import annotations
 
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
 
 from openjiuwen.core.common.exception.codes import StatusCode
 from openjiuwen.core.common.exception.errors import BaseError
@@ -83,6 +84,23 @@ async def load_main_binding(session_id: str) -> ConversationBinding | None:
     if metadata:
         patch_session_metadata(session_id, {STORAGE_FIELD: SHARED_STORAGE})
     return binding
+
+
+@asynccontextmanager
+async def shared_session_operation(session_id: str) -> AsyncIterator[bool]:
+    """Own a shared Session's operation while a host action rewrites its record.
+
+    Fails fast with ``SessionOperationBusyError`` while a run or a mode switch
+    owns the Session. A Session without a shared record keeps its earlier,
+    unlocked behaviour. Yields whether the Session is shared.
+    """
+    from jiuwenswarm.runtime.session.operation_lock import acquire_operation
+
+    if await load_main_binding(session_id) is None:
+        yield False
+        return
+    with acquire_operation("session", session_id):
+        yield True
 
 
 async def prepare_shared_leader(native: Any, child: Any, team_session: Any) -> None:
