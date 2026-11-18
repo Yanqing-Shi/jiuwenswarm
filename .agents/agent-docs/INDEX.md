@@ -171,6 +171,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) | D | Session 共享主对话窗口 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/server/runtime/session, jiuwenswarm/agents/harness/common, agent-core/openjiuwen/core/context_engine, agent-core/openjiuwen/core/session, agent-core/openjiuwen/harness, agent-core/openjiuwen/agent_teams/harness | — | — |
 | [F_20261113_0307_shared-conversation-runtime](features/F_20261113_0307_shared-conversation-runtime.md) | F | I-04 共享主窗口的 Runtime 与 adapter 装配 | Yanqing-Shi | jiuwenswarm/runtime, jiuwenswarm/server/runtime/agent_adapter, jiuwenswarm/agents/harness/common | jiuwenswarm/runtime/session/conversation.py, jiuwenswarm/runtime/service.py, jiuwenswarm/runtime/session_provisioner.py, jiuwenswarm/server/runtime/agent_adapter/interface_deep.py, jiuwenswarm/server/runtime/agent_adapter/team_helpers.py, jiuwenswarm/server/runtime/session/session_metadata.py, jiuwenswarm/agents/harness/common/session_ops_service.py | [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) |
+| [B_20261118_0610_shared-session-rewind-and-leader-ownership](bugfix/runtime/B_20261118_0610_shared-session-rewind-and-leader-ownership.md) | B | 共享会话回退写回共享记录，Leader 交还未用的会话操作 | Yanqing-Shi | jiuwenswarm/agents/harness/common, jiuwenswarm/runtime/session, jiuwenswarm/server | jiuwenswarm/agents/harness/common/session_ops_service.py, jiuwenswarm/runtime/session/conversation.py, jiuwenswarm/runtime/session/native_operation.py, jiuwenswarm/server/handlers/session.py, jiuwenswarm/server/agent_ws_server.py, tests/unit_tests/runtime/test_shared_conversation_runtime.py | 无独立 D：共享会话检视（2026-11-17）的 P1 问题修复；依据本地集成的共享会话与会话操作锁实现，无独立 D。 |
 
 <a id="module-14"></a>
 
@@ -302,6 +303,7 @@ generated: true
 
 | ID / 文档 | 类型 | 标题 | 作者 | 模块 | 代码文件 | 关联 D |
 |---|---|---|---|---|---|---|
+| [B_20261118_0610_shared-session-rewind-and-leader-ownership](bugfix/runtime/B_20261118_0610_shared-session-rewind-and-leader-ownership.md) | B | 共享会话回退写回共享记录，Leader 交还未用的会话操作 | Yanqing-Shi | jiuwenswarm/agents/harness/common, jiuwenswarm/runtime/session, jiuwenswarm/server | jiuwenswarm/agents/harness/common/session_ops_service.py, jiuwenswarm/runtime/session/conversation.py, jiuwenswarm/runtime/session/native_operation.py, jiuwenswarm/server/handlers/session.py, jiuwenswarm/server/agent_ws_server.py, tests/unit_tests/runtime/test_shared_conversation_runtime.py | 无独立 D：共享会话检视（2026-11-17）的 P1 问题修复；依据本地集成的共享会话与会话操作锁实现，无独立 D。 |
 | [S_02_session-operation-ownership](specs/runtime/S_02_session-operation-ownership.md) | S | Session 运行与模式切换的操作互斥 | Yanqing-Shi | jiuwenswarm/runtime/session, jiuwenswarm/agents/harness/team | jiuwenswarm/runtime/session/operation_lock.py, jiuwenswarm/runtime/session/native_operation.py, jiuwenswarm/runtime/session/coordinator.py, jiuwenswarm/runtime/service.py, jiuwenswarm/server/runtime/session/project_store.py | — |
 
 <a id="module-28"></a>
@@ -312,6 +314,7 @@ generated: true
 |---|---|---|---|---|---|---|
 | [B_20261029_0927_missing-supervisor-entry](bugfix/jiuwenswarm/server/B_20261029_0927_missing-supervisor-entry.md) | B | 重启 AgentServer 时缺少 supervisor 启动函数 | xinyang_bali | jiuwenswarm/server | jiuwenswarm/server/app_agentserver.py | 无独立 D：用户请求重启时发现当前工作区入口不完整，恢复既有 Front/Worker 启动契约。 |
 | [B_20261031_1042_pr9317-review](bugfix/jiuwenswarm/server/B_20261031_1042_pr9317-review.md) | B | PR 9317 插件模式校验与 Front 遗留启动链清理 | xinyang_bali | jiuwenswarm/server, jiuwenswarm/server/runtime/agent_adapter | jiuwenswarm/server/app_agentserver.py, jiuwenswarm/server/runtime/agent_adapter/plugin_runtime.py, tests/unit_tests/test_app_agentserver.py, tests/unit_tests/agentserver/test_ttse_plugin_runtime.py | 无独立 D：根据 openJiuwen-bot 检视意见清理现有实现，不引入新接口或架构方案，无独立 D。 |
+| [B_20261118_0610_shared-session-rewind-and-leader-ownership](bugfix/runtime/B_20261118_0610_shared-session-rewind-and-leader-ownership.md) | B | 共享会话回退写回共享记录，Leader 交还未用的会话操作 | Yanqing-Shi | jiuwenswarm/agents/harness/common, jiuwenswarm/runtime/session, jiuwenswarm/server | jiuwenswarm/agents/harness/common/session_ops_service.py, jiuwenswarm/runtime/session/conversation.py, jiuwenswarm/runtime/session/native_operation.py, jiuwenswarm/server/handlers/session.py, jiuwenswarm/server/agent_ws_server.py, tests/unit_tests/runtime/test_shared_conversation_runtime.py | 无独立 D：共享会话检视（2026-11-17）的 P1 问题修复；依据本地集成的共享会话与会话操作锁实现，无独立 D。 |
 
 <a id="module-29"></a>
 
