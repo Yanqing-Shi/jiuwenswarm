@@ -39,6 +39,16 @@ class NativeOperationBinding:
             self._callers.add(caller)
             caller.add_done_callback(self._on_caller_done)
 
+    def release(self) -> None:
+        """Return ownership the harness took for work that then did not start.
+
+        No state transition follows such work, so ``on_state`` would never end
+        the operation. A Leader that is running keeps it.
+        """
+        harness = self._harness()
+        if harness is None or getattr(harness.state, "value", harness.state) in {"idle", "terminated"}:
+            self._coordinator.end_native_operation(self._token)
+
     async def on_state(self, *, new: Any) -> None:
         phase = getattr(new, "value", new)
         if phase == "running":
@@ -78,4 +88,4 @@ async def bind_native_operation(
         await agent.subscribe(on_state=binding.on_state)
         agent._swarm_operation_binding = binding
     binding.guard = guard
-    agent.set_conversation_guard(binding.check)
+    agent.set_conversation_guard(binding.check, release=binding.release)

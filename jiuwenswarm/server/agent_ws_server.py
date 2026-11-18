@@ -14,9 +14,10 @@ import shutil
 import sys
 import time
 import uuid
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, NamedTuple, Optional
+from typing import Any, Awaitable, Callable, ClassVar, NamedTuple, Optional
 from weakref import WeakValueDictionary
 
 from openjiuwen.core.common.logging import server_logger
@@ -7102,12 +7103,53 @@ class AgentWebSocketServer:
             response_id=request.request_id,
         )
 
+    async def _rewind_with_session_ownership(
+        self, ws: Any, request: AgentRequest, send_lock: asyncio.Lock,
+        rewind: Callable[[], Awaitable[None]],
+    ) -> None:
+        """Run a rewind while owning a shared Session, so no run writes its record meanwhile.
+
+        A busy shared Session is refused before anything changes; history and
+        context stay as they were.
+        """
+        from jiuwenswarm.runtime.session.conversation import shared_session_operation
+        from jiuwenswarm.runtime.session.operation_lock import SessionOperationBusyError
+
+        params = request.params if isinstance(request.params, dict) else {}
+        target_sid = str(params.get("session_id") or request.session_id or "").strip()
+        if not target_sid:
+            await rewind()
+            return
+        async with AsyncExitStack() as owned:
+            try:
+                await owned.enter_async_context(shared_session_operation(target_sid))
+            except SessionOperationBusyError:
+                wire = AgentWebSocketServer._send_error_response(
+                    ws, request, send_lock, "session is busy", "SESSION_BUSY",
+                )
+                async with send_lock:
+                    await send_wire_payload(ws, wire)
+                return
+            await rewind()
+
     async def _handle_session_rewind_full(
         self, ws: Any, request: AgentRequest, send_lock: asyncio.Lock,
         restore_files: bool = False,
         compact: bool = False,
     ) -> None:
         """Full rewind: truncate history.json + context_engine + update checkpointer."""
+        await self._rewind_with_session_ownership(
+            ws, request, send_lock,
+            lambda: self._rewind_session_full_locked(
+                ws, request, send_lock, restore_files=restore_files, compact=compact,
+            ),
+        )
+
+    async def _rewind_session_full_locked(
+        self, ws: Any, request: AgentRequest, send_lock: asyncio.Lock,
+        restore_files: bool = False,
+        compact: bool = False,
+    ) -> None:
         from jiuwenswarm.agents.harness.common.session_ops_service import (
             rewind_session,
             rewind_session_context,
@@ -7316,6 +7358,14 @@ class AgentWebSocketServer:
         self, ws: Any, request: AgentRequest, send_lock: asyncio.Lock
     ) -> None:
         """Truncate history.json + in-memory context_engine for a session."""
+        await self._rewind_with_session_ownership(
+            ws, request, send_lock,
+            lambda: self._rewind_session_context_locked(ws, request, send_lock),
+        )
+
+    async def _rewind_session_context_locked(
+        self, ws: Any, request: AgentRequest, send_lock: asyncio.Lock
+    ) -> None:
         from jiuwenswarm.agents.harness.common.session_ops_service import (
             rewind_session,
             rewind_session_context,
