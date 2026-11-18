@@ -225,6 +225,7 @@ generated: true
 | [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) | D | Session 共享主对话窗口 | Yanqing-Shi | — |
 | [F_20261104_1225_npc-team-member-sessions](features/F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
 | [F_20261113_0307_shared-conversation-runtime](features/F_20261113_0307_shared-conversation-runtime.md) | F | I-04 共享主窗口的 Runtime 与 adapter 装配 | Yanqing-Shi | [D-20261112-0530-session-conversation-window](designs/proposals/D-20261112-0530-session-conversation-window/design.md) |
+| [B_20261118_0610_shared-session-rewind-and-leader-ownership](bugfix/runtime/B_20261118_0610_shared-session-rewind-and-leader-ownership.md) | B | 共享会话回退写回共享记录，Leader 交还未用的会话操作 | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）的 P1 问题修复；依据本地集成的共享会话与会话操作锁实现，无独立 D。 |
 | [S_02_app-role-npc-team](specs/jiuwenswarm/server/runtime/agent_adapter/S_02_app-role-npc-team.md) | S | app_role 的团队 NPC 与轻量咨询契约 | kdgmpw | — |
 
 <a id="module-jiuwenswarm-agents-harness-common-memory"></a>
@@ -642,6 +643,7 @@ generated: true
 
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
+| [B_20261118_0610_shared-session-rewind-and-leader-ownership](bugfix/runtime/B_20261118_0610_shared-session-rewind-and-leader-ownership.md) | B | 共享会话回退写回共享记录，Leader 交还未用的会话操作 | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）的 P1 问题修复；依据本地集成的共享会话与会话操作锁实现，无独立 D。 |
 | [S_02_session-operation-ownership](specs/runtime/S_02_session-operation-ownership.md) | S | Session 运行与模式切换的操作互斥 | Yanqing-Shi | — |
 
 <a id="module-jiuwenswarm-server"></a>
@@ -657,6 +659,7 @@ generated: true
 | [B_20261029_0927_missing-supervisor-entry](bugfix/jiuwenswarm/server/B_20261029_0927_missing-supervisor-entry.md) | B | 重启 AgentServer 时缺少 supervisor 启动函数 | xinyang_bali | 无独立 D：用户请求重启时发现当前工作区入口不完整，恢复既有 Front/Worker 启动契约。 |
 | [B_20261031_1042_pr9317-review](bugfix/jiuwenswarm/server/B_20261031_1042_pr9317-review.md) | B | PR 9317 插件模式校验与 Front 遗留启动链清理 | xinyang_bali | 无独立 D：根据 openJiuwen-bot 检视意见清理现有实现，不引入新接口或架构方案，无独立 D。 |
 | [B_20261116_1540_interrupt-intent-contract](bugfix/jiuwenswarm/server/B_20261116_1540_interrupt-intent-contract.md) | B | chat.interrupt 未知 intent 静默假成功：WS/HTTP 双入口统一契约校验 | ZHANGPP_ | 无独立 D：依据联调现场与 PR 检视意见定位，无独立设计文档；修复限定 intent 契约校验范围，并补回归测试。 |
+| [B_20261118_0610_shared-session-rewind-and-leader-ownership](bugfix/runtime/B_20261118_0610_shared-session-rewind-and-leader-ownership.md) | B | 共享会话回退写回共享记录，Leader 交还未用的会话操作 | Yanqing-Shi | 无独立 D：共享会话检视（2026-11-17）的 P1 问题修复；依据本地集成的共享会话与会话操作锁实现，无独立 D。 |
 
 <a id="module-jiuwenswarm-server-control"></a>
 
