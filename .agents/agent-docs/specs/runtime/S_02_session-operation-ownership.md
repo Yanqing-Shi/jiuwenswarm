@@ -17,7 +17,7 @@ files:
 
 # Session 运行与模式切换的操作互斥
 
-最近一次修订日期：2026-11-14。
+最近一次修订日期：2026-11-18。
 
 本契约覆盖共享主对话方案的 I-00 基础：运行（聊天、goal、heartbeat、Team 主执行者）与模式切换共用一把 Session 操作锁。
 不定义共享对话存储，不定义旧 Session 的升级处理。归档与删除不在本契约范围内，见文末“预留”。
@@ -30,6 +30,8 @@ files:
 4. stop 不取得第二把 Session 锁。交互回复与当前 goal/Team 控制输入显式保留现有操作引用，不能等待自己持有的非重入锁。用户输入抢占 heartbeat 的既有 admission 必须发生在等待操作锁之前。
 5. 实际 Leader 通过现有 conversation guard 取得或保留当前操作；mode 复核只在它新取得所有权时执行一次，持有期间的后续输入不再复核，单 Agent 适配器不安装该 guard。Leader 通过 NativeHarness 状态订阅在最终 checkpoint 之后的 IDLE/TERMINATED 释放；supervisor 异常退出也释放。后台自动输入和无人订阅的运行适用同一规则。Team round 与请求只保留同一执行锁的引用，不引入新的持久化 lease 协议。
 6. 纯观察订阅与已空闲的 Team stream 不持有执行所有权；子执行者的私有窗口不申请主 Session 锁。复制式 handoff 已移除（见 S_01 的撤销说明）；实际 Leader 的操作所有权由共享绑定的启动前钩子接通，guard 不带参数。
+7. Leader 的 guard 通过后若工作最终没有起轮（例如 goal 已被清除），不会有状态转换来释放操作。`NativeOperationBinding.release()` 作为 `set_conversation_guard(..., release=...)` 的回调交给 Core：harness 已不存在或处于 IDLE/TERMINATED 时结束本 token 的操作，运行中的 Leader 保留。依赖包含该回调的 Core 版本。
+8. 改写共享主记录的宿主操作在会话操作锁内进行：四个回退入口（WebSocket 与 HTTP 的完整回退、仅上下文回退）在任何改动之前进入 `shared_session_operation(session_id)`，共享会话非阻塞取 Session 锁，锁忙返回 `SESSION_BUSY`，history 与上下文保持原样；未绑定共享记录的会话不取锁，行为不变。绑定会话的回退以共享记录写回成功为成功条件（`history_messages` 对绑定 Session 无效，回退用 `load_state` 一次替换窗口后提交）。
 
 普通 chat（unary/stream）在模式切换持有操作锁时，不能启动执行者、模型或工具；切换完成后，排队 chat 重读持久化模式。
 
