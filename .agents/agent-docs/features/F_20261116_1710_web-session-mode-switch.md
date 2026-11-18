@@ -2,8 +2,8 @@
 id: F_20261116_1710_web-session-mode-switch
 title: Web 与 TUI 共用会话模式切换（mode.set / mode.get）
 type: F
-author: null
-author_email: null
+author: Yanqing-Shi
+author_email: toddsyq@gmail.com
 modules:
   - jiuwenswarm/agents/harness/team
   - jiuwenswarm/runtime
@@ -23,6 +23,9 @@ files:
   - jiuwenswarm/channels/web/frontend/src/App.tsx
   - jiuwenswarm/channels/web/frontend/src/components/ChatPanel/InputArea.tsx
   - jiuwenswarm/channels/web/frontend/src/hooks/useWebSocket.ts
+  - jiuwenswarm/channels/web/frontend/src/features/sessionMode/modeSwitchGate.ts
+  - jiuwenswarm/channels/web/frontend/src/components/ChatPanel/index.tsx
+  - jiuwenswarm/channels/web/frontend/src/stores/chatStore.ts
   - scripts/acceptance/web_mode_switch_bench.py
 designs: []
 design_note: 无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。
@@ -98,6 +101,105 @@ design_note: 无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（
 - 待同步：agent-gateway PR 合并后更新本仓 `pyproject.toml` 与 `uv.lock` 中的版本号；在此之前 `test_mode_requests_are_forwarded_by_every_mode_switch_channel` 只能在本地联调环境通过。
 - 测试归属：版本号将跟进到 Gateway `develop`，其中 `9650ef2ee`（2026-11-14，个人版 `path.get` / `path.set` 改经 AgentServer）与 A4P 路由修复使本仓 `tests/unit_tests/gateway/test_app_web_handlers.py` 中 4 个测试函数（共 6 例：`test_a4p_rpc_uses_current_websocket_route`、`test_path_set_*`）失败。逐行比对确认它们是 Gateway 仓同名测试的旧版副本，Gateway `develop` 已有覆盖相同场景的新版，故从本仓删除，与 develop 上 `227ae5260`（移除过时 Gateway 测试套件）方向一致。删除后该文件与模式切换测试在 `develop` 版 Gateway 下 449 项全部通过。
 
+## 2026-11-18 04:37（Asia/Singapore）续写：切换与提示词按用户操作顺序（单标签页）
+
+### 问题
+
+服务端按到达先后处理 `mode.set` 与对话请求。用户先切换、再发送时，若对话请求先到，切换以 `SESSION_BUSY` 被拒，提示词按旧模式运行；反过来，提示词已按下但处理中标记尚未设置的窗口内（`ChatPanel.handleSendMessage` 先等待插件刷新历史），切换仍可发出。
+
+### 用户确认的决定（2026-11-17，开发会话）
+
+- 由 Web 前端保证顺序：同一会话在同一标签页内，不同时有切换请求与提示词在途。规则是“`mode.set` 未结束则提示词等待”。
+- 等待的提示词进入现有提示词队列（`taskQueue`），不合并；切换成功后按原有规则逐条发送（上一轮结束即发送下一条）。
+- 切换未成功（busy / not_applied / uncertain / failed）：队列内提示词保留并暂停队列，不以旧模式发出。
+- 队列扩展到 Agent 与 Team 两种模式。Team 模式运行中提交仍直接发送给 Leader（原行为）；Team 下队列只容纳等待切换的提示词与 Agent 模式遗留项。
+- 只保证单标签页内顺序。多个标签页或客户端同时操作同一会话，仍按服务端到达顺序决定；用户后续另行处理（候选方案：每个提示词携带模式版本，过期则拒绝）。
+- 服务端主动推送 `session.mode_changed` 作为第二步，待用户联调本步后再实施。
+
+### 实际实现
+
+- `features/sessionMode/modeSwitchGate.ts`（新增，纯函数）：是否等待切换、队列在哪些模式下发送、切换结束后队列动作（committed → 发送；其余结果且队列非空 → 暂停），以及“提示词提交中”按会话计数的标记。
+- `chatStore`：新增会话运行态 `modeSwitchPending`。未复用无调用方的 `switchingMode`：设置它会重置处理中状态，并使 `chat.processing_status` / `chat.interrupt_result` 被丢弃。历史重载等运行态重置不清除该标记，只由发起切换的提交清除。`claimQueuedTask`（含队列面板的“继续”）与 `claimTaskInput`（插话）在标记期间拒绝领取。
+- `App.switchSessionModeInPlace`：等待 `commitSessionMode` 前设置标记，`finally` 中清除；committed / not_applied 时另外更新侧栏列表的模式（`useWorkspaceStore.patchSession`，原先侧栏保留旧模式，重新打开会话会套用旧模式）；随后按上述规则发送或暂停队列，原有提示不变。
+- `App.handleSwitchMode` 与 `InputArea.handleModeSwitch`：处理中、切换未结束或提示词提交中时拒绝切换；`InputArea` 的检查放在清除已选技能之前，被拒绝的切换不再丢掉技能。`modeLocked` 包含切换未结束，模式控件期间锁定。
+- `ChatPanel.handleSendMessage`：在等待插件刷新前设置“提交中”标记，在同步调用发送后（或刷新失败时）结束；发送路径在第一次 await 之前设置处理中状态，二者衔接。
+- `InputArea.handleSubmit`：切换未结束时，提交加入队列并保留已选技能；已启用目标（goal）的提交直接返回并保留草稿（`command.goal` 无法排队）。
+- `useWebSocket.sendMessage` 兜底：切换未结束时普通提示词入队并返回成功（覆盖 MCP 应用消息、计划执行提示等直接调用），队列项插话返回失败，避免误报“补充失败”。
+- 队列两种模式化：`drainTaskQueueIfIdle` 按 Agent / Team 放行并在切换未结束时不发送；`chat.processing_status(false)` 与恢复结果处的 `currentMode === 'agent'` 前置判断删除，统一由 `drainTaskQueueIfIdle` 判断。队列卡片在 Team 下显示；单项“立即发送”（插话）按钮只在 Agent 下显示。暂停队列时的确认弹窗仍只在 Agent 下出现。
+- `App.handleCancel` Team 分支：队列非空时先暂停队列，否则停止后普通的 `processing_status(false)` 会自动发出下一条。
+- `App` 的 MCP 应用消息处理在切换未结束时拒绝（与队列暂停时一致）。
+
+### 行为说明与取舍
+
+- 已暂停的队列在切换成功后仍保持暂停，需用户点“继续”。
+- 队列项不保存技能与输入来源：发送时使用当时已选技能，来源记为普通手动输入（原有限制）。切换等待期间选择的技能来自旧模式的选择器。
+- 未覆盖的入口：`/compact`、对智能体提问的回答、A2UI 操作、Team 组织界面（本环境关闭）的后台轮次结束不触发队列发送。
+- 切换到 Team 成功后立即发送的第一条队列提示词，可能早于 Team 事件流挂接（`attach_only`）发出；推断无功能影响（运行中会话的挂接本就允许），未验证。
+
+### 实际执行与证据
+
+| 执行日期 / 验证范围 | 实现版本与环境 | 命令 / 复现步骤 | 实际结果 | 未覆盖项 / 失败原因 |
+| --- | --- | --- | --- | --- |
+| 2026-11-18 变更前基线 | `local-web-mode` 工作区，基于 `54d92e149`；WSL2 Linux，Node 22.22.1 | 同下 | session-mode-commit 14/14；chat-store-streaming 10/10；input-area-permission-merge 105/107；session-input 103/104；`chatErrorSseLifecycle` 15 通过 / 5 失败 / 1 跳过 | 失败项见下行，变更前即失败 |
+| 2026-11-18 前端单测 | 同上，含本次未提交改动 | `npm run test:session-mode-commit`、`test:chat-store-streaming`、`test:input-area-permission-merge`、`test:session-input`、`node --test tests/chatErrorSseLifecycle.test.mjs` | 18/18；12/12；117/119；106/107；15 通过 / 5 失败 / 1 跳过。新增 21 例全部通过 | 失败项与基线相同：企业版输入区锁定、组织 Owner 停止后禁用、MoA 状态路由各 1 例；`chatErrorSseLifecycle` 5 例为测试本身过期（`isTeamOrganizationUiEnabled is not defined` 等），前后报错一致 |
+| 2026-11-18 构建 | 同上 | `node_modules/.bin/vite build` | 通过 | 未单独执行 TypeScript 类型检查（本仓约束不运行静态检查）；编辑器对 `App.tsx`、`useWebSocket.ts` 无错误诊断，其余文件未确认被分析 |
+| — 真实服务联调 | — | 启动服务后：切换后立即发送；发送后立即切换；Agent 排队两条后停止再切到 Team | 未执行 | 待用户本地验证 |
+
+新增测试：`tests/sessionModeGate.test.mjs`（纯函数 4 例）；`chatStoreStreaming` 2 例（领取拦截、无运行态时记录标记）；`inputAreaPermissionMerge` 12 例（Agent / Team 切换未结束时入队、Team 空闲直发、模式控件锁定、菜单打开期间提示词已按下则不切换、goal 保留草稿、committed 发送、四种未成功结果暂停、“提示词按下后切换即被拒绝”）；`sessionInput` 3 例（切换未结束时入队与不发送、Team 下遗留项逐条发送且无插话按钮、Team 停止暂停队列）。
+
+## 2026-11-18 23:41（Asia/Singapore）续写：`mode.set` 必须携带 `expected_mode`
+
+### 起因
+
+Gateway MR openJiuwen/agent-gateway!173（GitHub openJiuwen-ai/agent-gateway#234，Web 转发 `mode.set` / `mode.get`）的检视意见：
+
+- 安全：任意已认证连接可对任意 `session_id` 发起 `mode.set`。会话归属已由 AgentServer 校验（`mode_switch_session_visible_to`：创建通道与用户须与请求方一致，否则 `NOT_FOUND`）；检视人建议至少要求 `expected_mode` 与当前值一致才能变更。
+- 并发：两个标签页同时切换同一会话时后写覆盖前写。AgentServer 按会话串行处理 mode 请求，并在跨进程文件锁内比较后写入，后到的冲突请求得到 `MODE_CONFLICT`；但此前 `expected_mode` 可省略，省略时直接覆盖，不做比较。
+
+### 决定与实现
+
+- 用户决定（2026-11-18）：`mode.set` 必须携带非空字符串 `expected_mode`，缺失、`null`、非字符串或空白一律 `BAD_REQUEST`（"expected_mode is required"），在启动 Runtime 之前拒绝。改动只在 `AgentWebSocketServer._answer_mode_request`；`switch_session_mode` 与 `compare_and_set_session_mode` 不变，已存模式未知（旧会话）时仍跳过比较，可用显式切换修复。
+- Web（`commitSessionMode.ts`）与 TUI（`/mode`）本来总是携带当前模式，客户端无需改动。
+- `expected_mode` 是并发保护，不是访问控制：能读到模式（`mode.get`）的调用方就能给出它。访问控制仍是上面的归属校验。
+
+### 实际执行与证据
+
+| 执行日期 / 验证范围 | 实现版本与环境 | 命令 | 实际结果 | 未覆盖项 |
+| --- | --- | --- | --- | --- |
+| 2026-11-18 变更前 | `local-web-mode` 工作区（含未提交改动），`web-mode-env.sh` | `pytest tests/unit_tests/runtime/test_session_mode_switch.py` | 新增 3 例“缺少 / null / 空白 `expected_mode`”失败；其余 224 例通过 | — |
+| 2026-11-18 变更后 | 同上 | `pytest tests/unit_tests/runtime/test_session_mode_switch.py test_session_operation_lock.py test_shared_conversation_runtime.py test_runtime_service.py` | 473 例全部通过 | 真实服务联调未执行 |
+
+同时补充的用例（变更前即通过，记录现有行为）：两个冲突的 `mode.set` 经真实 Runtime 并发提交，一个成功、一个 `MODE_CONFLICT`，`mode_revision` 只增加 1；非规范目标模式（`team.design`、`team`、`agent.work`、`agent.work.bogus`、空串）得到 `BAD_REQUEST` 且已存模式不变；不存在的会话上 `mode.set` / `mode.get` 得到 `NOT_FOUND`。
+
+### 兼容
+
+Gateway 文档同步写明 `expected_mode` 必填；未包含本改动的 AgentServer 仍接受省略它的请求，两者应一起发布。
+
+## 2026-11-19 00:57（Asia/Singapore）续写：只有归属者能切换模式，请求不再补写归属者
+
+### 起因
+
+Gateway MR !173 的检视继续指出两点：未记录归属者（`user_id` 为空）的会话对同通道的任意调用方都通过归属校验；`sync_session_request_metadata` 会在已有会话归属者为空时用请求方补写，一条提示词就能让已识别用户成为该会话的归属者，再通过 `mode.set` 校验。归属校验与 `expected_mode` 已在 `compare_and_set_session_mode` 的同一把锁内完成，调用方身份就是网关转发的连接身份（IAM 启用时由握手绑定到 token，见网关 MR）。
+
+空归属者的来源：个人版 Web 不声明用户、TUI 未配置 userId 时创建的会话；少数不知道用户的补建路径（会话尚无元数据时改名、投递上下文在元数据缺失时写入）；无 `metadata.json` 的旧会话在列表中拼出的空值。会话消息服务已把空归属者视为匿名 `local` 范围。
+
+### 决定与实现（用户确认，2026-11-19）
+
+- `mode_switch_session_visible_to`：调用方必须等于记录的归属者。空归属者即匿名用户，只匹配匿名调用方（个人版两边都为空，行为不变）；已识别用户访问无归属会话得到 `NOT_FOUND`。范围为所有可切换模式的会话（Web、TUI，含群聊；代理组、外部代理、定时任务会话本就不可切换）。
+- `sync_session_request_metadata`：已有会话不再由请求补写归属者，归属者只在创建时记录（该函数自身的新建分支仍记录创建者）。全仓只有聊天请求同步（`runtime/request.py`）向它传 `user_id`；会话列表不按归属者过滤，其余读取方（跨会话消息、定时任务创建者兜底、断连续跑路由）都以创建时归属者为准。
+- 不在本次范围：`session.switch` 与聊天请求本身不校验归属者。按用户部署 AgentServer 的 AgentOS 中由沙箱隔离兜底；多用户共享同一 AgentServer 时仍是缺口，另行立项。
+
+### 实际执行与证据
+
+| 执行日期 / 验证范围 | 实现版本与环境 | 命令 | 实际结果 | 未覆盖项 |
+| --- | --- | --- | --- | --- |
+| 2026-11-19 变更前 | `local-web-mode` 工作区（含未提交改动），`web-mode-env.sh` | `pytest tests/unit_tests/runtime/test_session_mode_switch.py -k "recorded_owner or ownerless or claim or still_records"` | 12 例失败（已识别用户可切换 / 读取无归属会话；提示词补写归属者），18 例通过 | — |
+| 2026-11-19 变更后 | 同上 | `pytest tests/unit_tests/runtime/test_session_mode_switch.py test_session_operation_lock.py test_shared_conversation_runtime.py test_runtime_service.py` | 499 例全部通过 | 见下行全量对比 |
+
+### 兼容
+
+升级后，经补建路径产生的无归属会话对已识别用户不再可切换模式（`NOT_FOUND`），这类会话可在新对话中继续；已被旧逻辑补写过归属者的会话不受影响。
+
 ## 已知遗留
 
 ### 2026-11-17 04:17（Asia/Singapore）：空闲 Team 监听导致误报忙碌
@@ -113,3 +215,4 @@ design_note: 无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（
 
 - 跨 work / code 类型切换时 `work_mode` 不更新（沿用 TUI 限制），基准脚本因此拒绝混合类型的序列。
 - Web 的中断确认早于后端完全停止，紧接着切换可能返回 `SESSION_BUSY`；界面提示用户停止后重试，基准脚本退避重试。
+- `session.switch` 与聊天请求不校验会话归属者（2026-11-19 续写的“不在本次范围”）；多用户共享同一 AgentServer 时需要单独设计。
