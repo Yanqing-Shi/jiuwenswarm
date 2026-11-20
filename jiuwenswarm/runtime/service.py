@@ -3366,6 +3366,7 @@ class AgentRuntime:
         user_id: str,
     ) -> dict[str, Any]:
         """Synchronously commit a Session route while retaining project ownership."""
+        from jiuwenswarm.enterprise.edition import is_enterprise
         from jiuwenswarm.server.runtime.session.session_history import (
             append_session_mode_changed,
         )
@@ -3381,6 +3382,10 @@ class AgentRuntime:
 
         if normalize_switchable_session_mode(target_mode) != target_mode:
             raise SessionModeSwitchError("unsupported mode", code="BAD_REQUEST")
+        if is_enterprise():
+            # The enterprise Web UI fixes the mode once a conversation has messages and
+            # never sends mode.set; refuse it here so the rule does not rest on the client.
+            raise SessionModeSwitchError("enterprise edition sessions cannot switch mode", code="BAD_REQUEST")
         metadata = get_session_metadata(
             session_id, cache_bust=True, enable_writeback=False,
         )
