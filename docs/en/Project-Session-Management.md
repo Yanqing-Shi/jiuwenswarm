@@ -13,7 +13,7 @@ The current implementation adds a `work_mode` dimension to isolate regular work 
 
 Expert and expert group chats keep model selections per session. Returning to a session retains its selection, and reloading the page restores it from session metadata. Local choices are also retained when switching sessions before sending a message. The chat selector and outgoing requests use the same model selection. If restoration fails, the page shows an error and temporarily disables sending to avoid using the default model unintentionally.
 
-TUI `/mode` can switch the current execution mode within one Session ID. `metadata.mode` identifies the current executor and work/code profile; `work_mode` remains the original project index. A mode switch does not move history or change `project_id`, `project_dir`, or `work_mode`. Only an explicit project rebind changes that ownership.
+A `mode.set` request switches the current execution mode within one Session ID; the Web in-conversation mode switch (see [Modes](Modes.md)) uses it. `metadata.mode` identifies the current executor and work/code profile; `work_mode` remains the original project index. A mode switch does not move history or change `project_id`, `project_dir`, or `work_mode`. Only an explicit project rebind changes that ownership.
 
 ### Core Concepts
 
@@ -28,7 +28,7 @@ Sessions created before this behaviour have no shared conversation and are not m
 | **Code project Git capabilities** | Real `code` projects expose Git status, init, branch, Diff, history, monitoring, and discard/redo APIs. Default projects and `work` projects do not expose Git operations |
 | **Pinned sessions** | Detached from project groups and fetched via `project.pinned_sessions`, sorted by `pin_order` ascending |
 | **Pinned projects** | Pinned projects appear first, sorted by `pin_order` ascending |
-| **Project binding** | TUI `/mode` preserves the bound `project_id`, `project_dir`, and `work_mode`; project rebinding uses a separate entry point |
+| **Project binding** | `mode.set` preserves the bound `project_id`, `project_dir`, and `work_mode`; project rebinding uses a separate entry point |
 
 ### Communication Convention
 
@@ -111,7 +111,7 @@ Returned by `project.get_sessions` / `project.pinned_sessions`.
 
 ### Mode Values
 
-TUI mode switches store these canonical values; older sessions can still contain legacy aliases.
+`mode.set` stores these canonical values; older sessions can still contain legacy aliases.
 
 | Value | Description |
 |-------|-------------|

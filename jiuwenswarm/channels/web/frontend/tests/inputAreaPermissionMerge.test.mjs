@@ -172,6 +172,9 @@ const { setTeamOrganizationUiEnabled } = await import('../node_modules/.cache/in
 const { isMultiModelCollaborationEnabled, setMultiModelCollaborationEnabled } =
   await import('../node_modules/.cache/input-area-permission-merge/features/multiModelCollaboration/featureConfig.js');
 const { webClient } = await import('../node_modules/.cache/input-area-permission-merge/services/webClient.js');
+const { useGoalStore } = await import('../node_modules/.cache/input-area-permission-merge/stores/index.js');
+const { beginPromptSubmit, endPromptSubmit, isPromptSubmitInFlight, queueActionAfterModeCommit } =
+  await import('../node_modules/.cache/input-area-permission-merge/features/sessionMode/modeSwitchGate.js');
 const { useSessionAssetsStore } =
   await import('../node_modules/.cache/input-area-permission-merge/features/sessionAssets/sessionAssets.js');
 
@@ -333,6 +336,23 @@ test('web plus opens browser picker directly without a server file dialog', asyn
   });
 });
 
+test('browser picker shows a preparing card until the picker returns or is cancelled', async () => {
+  await mount({}, async () => {
+    const input = byId('chat-panel-input-file-input');
+    input.click = () => {};
+    await click(byId('chat-panel-input-attach-trigger'));
+    await click(byId('chat-panel-input-attach-menu-file'));
+
+    const preparing = byId('chat-panel-input-attachment-preparing');
+    assert.ok(preparing.textContent?.includes(i18n.t('chat.inputAttachment.preparingFiles')));
+
+    await act(async () => {
+      input.dispatchEvent(new dom.window.Event('cancel'));
+    });
+    assert.equal(document.querySelectorAll('[data-testid="chat-panel-input-attachment-preparing"]').length, 0);
+  });
+});
+
 test('desktop plus accepts a document above 100 MiB as a path without reading its content', async () => {
   const pick = { kind: 'document', path: '/fixtures/large.txt', filename: 'large.txt', size: 101 * 1024 * 1024 };
   window.pywebview = { api: { select_local_files: async () => [pick] } };
@@ -396,6 +416,94 @@ for (const [filename, mime, limit] of [['image.png', 'image/png', 10], ['documen
   }
 }
 
+for (const [size, allowed] of [
+  [50 * 1024 * 1024, true],
+  [50 * 1024 * 1024 + 1, false],
+  [51 * 1024 * 1024, false],
+]) {
+  test(`enterprise document picker ${allowed ? 'accepts' : 'rejects'} ${size} bytes`, async () => {
+    window.__JIUWENSWARM_EDITION__ = 'enterprise';
+    try {
+      await mount({}, async ({ props, render }) => {
+        const received = [];
+        props.onPersistDocuments = async (_text, items) => {
+          received.push(...items);
+          return { media_items: items.map((item) => ({ ...item, path: `/uploads/${item.filename}` })) };
+        };
+        await render();
+        await click(byId('chat-panel-input-attach-trigger'));
+        assert.match(byId('chat-panel-input-attach-menu-file').getAttribute('data-tooltip'), /50 MiB/);
+        await click(byId('chat-panel-input-attach-menu-file'));
+
+        const file = new dom.window.File(['fixture'], 'document.txt', { type: 'text/plain' });
+        // Stub File.size here; the OBS preflight test exercises real encoded length.
+        Object.defineProperty(file, 'size', { value: size });
+        const input = byId('chat-panel-input-file-input');
+        Object.defineProperty(input, 'files', { value: [file] });
+        await act(async () => {
+          input.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+          if (allowed) {
+            for (let attempts = 0; received.length === 0 && attempts < 100; attempts += 1) {
+              await new Promise((resolve) => setTimeout(resolve, 5));
+            }
+          }
+        });
+        assert.equal(received.length, allowed ? 1 : 0);
+        if (!allowed) {
+          assert.match(document.body.textContent, /size exceeds limit: document\.txt \(max 50 MiB\)/);
+          await click(byId('chat-panel-input-attachment-retry'));
+          assert.equal(received.length, 0);
+        }
+      });
+    } finally {
+      delete window.__JIUWENSWARM_EDITION__;
+    }
+  });
+}
+
+test('enterprise welcome composer rejects a 51 MiB document before the first send', async () => {
+  window.__JIUWENSWARM_EDITION__ = 'enterprise';
+  try {
+    await mount({ sessionId: 'new' }, async () => {
+      const file = new dom.window.File(['fixture'], 'document.txt', { type: 'text/plain' });
+      Object.defineProperty(file, 'size', { value: 51 * 1024 * 1024 });
+      const input = byId('chat-panel-input-file-input');
+      Object.defineProperty(input, 'files', { value: [file] });
+      await act(async () => input.dispatchEvent(new dom.window.Event('change', { bubbles: true })));
+      assert.match(document.body.textContent, /size exceeds limit: document\.txt \(max 50 MiB\)/);
+      await typeInput('Read this document');
+      assert.ok(byId('chat-panel-input-send').disabled);
+    });
+  } finally {
+    delete window.__JIUWENSWARM_EDITION__;
+  }
+});
+
+test('enterprise OBS preflight measures decoded bytes at the 50 MiB boundary', async () => {
+  const { persistEnterpriseAttachments } = await import('../node_modules/.cache/input-area-permission-merge/services/obsUpload.js');
+  const originalFetch = globalThis.fetch;
+  const transfers = [];
+  const records = [{ path: '/uploads/document.txt', filename: 'document.txt' }];
+  globalThis.fetch = async (_url, options) => {
+    transfers.push(options.method);
+    return { ok: true, json: async () => ({ ok: true, url: 'https://example.invalid/attachment', name: 'document.txt' }) };
+  };
+  const request = async (method) => method === 'file.import_url' ? { files: records } : { media_items: records };
+  const max = 50 * 1024 * 1024;
+  const encodedPrefix = 'AAAA'.repeat(Math.floor(max / 3));
+  const upload = (base64Data) => persistEnterpriseAttachments(
+    request, '', 'enterprise-attachment', [{ filename: 'document.txt', base64Data }], 'document',
+  );
+  try {
+    await assert.rejects(upload(encodedPrefix + 'AAAA'), /File exceeds 50 MiB/);
+    assert.deepEqual(transfers, []);
+    assert.deepEqual(await upload(encodedPrefix + 'AAA='), { media_items: records });
+    assert.deepEqual(transfers, ['POST', 'DELETE']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('native image picks above 10 MiB are rejected before persist', async () => {
   await mount({}, async ({ props, render, inputAreaRef }) => {
     props.onPersistMedia = async () => assert.fail('oversized image must not upload');
@@ -425,6 +533,8 @@ async function mount(
   await i18n.changeLanguage(language);
   const saved = [];
   const switched = [];
+  // Whether the next mode switch commits; a refused one leaves the mode as it was.
+  const switchControl = { commits: true };
   const inputAreaRef = createRef();
   const props = {
     onSubmit() {},
@@ -434,9 +544,11 @@ async function mount(
       media_items: mediaItems.map((item) => ({ ...item, path: `C:/test/${item.filename}` })),
     }),
     onPersistDocuments: async () => ({}),
-    onSwitchMode: (next) => {
+    onSwitchMode: async (next) => {
       switched.push(next);
+      if (!switchControl.commits) return false;
       useSessionStore.getState().setMode(sessionId, next);
+      return true;
     },
     isProcessing: false,
     permissionProfile: profile,
@@ -450,7 +562,7 @@ async function mount(
   const unmountInputArea = async () => act(async () => root.render(null));
   try {
     await render();
-    await run({ saved, switched, props, render, unmountInputArea, sessionId, inputAreaRef });
+    await run({ saved, switched, switchControl, props, render, unmountInputArea, sessionId, inputAreaRef });
   } finally {
     await act(async () => {
       for (const button of document.querySelectorAll('[data-testid="chat-panel-input-attachment-remove"]')) {
@@ -466,6 +578,47 @@ async function mount(
     setMultiModelCollaborationEnabled(previousCollaboration);
   }
 }
+
+test('enterprise welcome composer shows upload failure for an empty document and preserves the draft', async () => {
+  window.__JIUWENSWARM_EDITION__ = 'enterprise';
+  try {
+    await mount({ sessionId: 'new' }, async ({ props, render }) => {
+      const sent = [];
+      props.onSubmit = (text, attachments) => sent.push({ text, attachments });
+      await render();
+      await typeInput('Check this document');
+      const input = byId('chat-panel-input-file-input');
+      async function waitForDocumentRead() {
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          const status = document.querySelector('[data-testid="chat-panel-input-attachment-status"]');
+          if (status?.getAttribute('data-variant') !== 'uploading') break;
+          await act(async () => new Promise((resolve) => setTimeout(resolve, 5)));
+        }
+      }
+      async function chooseDocument(content) {
+        const file = new dom.window.File([content], 'document.txt', { type: 'text/plain' });
+        Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+        await act(async () => input.dispatchEvent(new dom.window.Event('change', { bubbles: true })));
+        await waitForDocumentRead();
+      }
+      await chooseDocument('');
+      assert.equal(byId('chat-panel-input-attachment-status', 'error').textContent, i18n.t('chat.uploadFailed'));
+      assert.ok(byId('chat-panel-input-send').disabled);
+      await click(byId('chat-panel-input-attachment-retry'));
+      await waitForDocumentRead();
+      assert.ok(byId('chat-panel-input-attachment-status', 'error'));
+      assert.equal(byId('chat-panel-input').textContent, 'Check this document');
+      assert.equal(sent.length, 0);
+      await click(byId('chat-panel-input-attachment-remove'));
+      await chooseDocument('test');
+      await click(byId('chat-panel-input-send'));
+      assert.equal(sent[0]?.text, 'Check this document');
+      assert.equal(sent[0]?.attachments[0]?.base64Data, 'dGVzdA==');
+    });
+  } finally {
+    delete window.__JIUWENSWARM_EDITION__;
+  }
+});
 
 test('pasted image in a historical session restores after InputArea unmounts on the new conversation', async () => {
   await mount({}, async ({ inputAreaRef, sessionId, render, unmountInputArea }) => {
@@ -1542,4 +1695,280 @@ test('actual Owner composer remains disabled after stop and metadata refresh whi
       });
     }
   });
+});
+
+// ---- Ordering between an in-place mode switch and prompts (one tab) ----
+
+for (const mode of ['agent', 'team']) {
+  test(`${mode}: a prompt submitted while a mode switch is pending waits in the queue`, async () => {
+    await mount({ mode }, async ({ props, render, sessionId }) => {
+      const sent = [];
+      props.onSubmit = (...args) => sent.push(args);
+      props.onInterrupt = () => assert.fail('a held prompt must not interrupt');
+      await act(async () => useChatStore.getState().setModeSwitchPending(sessionId, true));
+      try {
+        await render();
+        await typeInput('sent right after the switch');
+        await click(byId('chat-panel-input-send'));
+        assert.deepEqual(sent, [], 'nothing may reach the server before the switch settles');
+        const queue = useChatStore.getState().getRuntime(sessionId).taskQueue;
+        assert.deepEqual(queue.map((task) => [task.content, task.status]), [['sent right after the switch', 'queued']]);
+      } finally {
+        await act(async () => useChatStore.getState().setModeSwitchPending(sessionId, false));
+      }
+    });
+  });
+}
+
+test('team: an idle composer without a pending switch still submits directly', async () => {
+  await mount({ mode: 'team' }, async ({ props, render, sessionId }) => {
+    const sent = [];
+    props.onSubmit = (text) => sent.push(text);
+    await render();
+    await typeInput('ordinary team input');
+    await click(byId('chat-panel-input-send'));
+    assert.deepEqual(sent, ['ordinary team input']);
+    assert.deepEqual(useChatStore.getState().getRuntime(sessionId).taskQueue, []);
+  });
+});
+
+test('a pending mode switch locks the mode control', async () => {
+  await mount({}, async ({ render, sessionId, switched }) => {
+    await act(async () => useChatStore.getState().setModeSwitchPending(sessionId, true));
+    try {
+      await render();
+      await click(byId('chat-panel-mode-select-trigger'));
+      assert.equal(document.querySelector('[data-testid="chat-panel-mode-select-menu"]'), null);
+      assert.deepEqual(switched, []);
+    } finally {
+      await act(async () => useChatStore.getState().setModeSwitchPending(sessionId, false));
+    }
+    await render();
+    await click(byId('chat-panel-mode-select-trigger'));
+    await click(byId('chat-panel-mode-select-option', 'team'));
+    assert.deepEqual(switched, ['team']);
+  });
+});
+
+for (const commits of [false, true]) {
+  test(`a mode switch that ${commits ? 'commits drops' : 'is refused keeps'} the selected skills and their chips`, async () => {
+    await mount({ sessionId: 'mode-switch-skills' }, async ({ sessionId, switched, switchControl }) => {
+      switchControl.commits = commits;
+      await act(async () => useSessionStore.getState().addSelectedSkill(sessionId, 'test-skill'));
+      assert.ok(byId('chat-panel-input').querySelector('[data-skill="test-skill"]'));
+      await click(byId('chat-panel-mode-select-trigger'));
+      await click(byId('chat-panel-mode-select-option', 'team'));
+      assert.deepEqual(switched, ['team']);
+      const kept = commits ? [] : ['test-skill'];
+      assert.deepEqual(useSessionStore.getState().getRuntime(sessionId).selectedSkills, kept);
+      assert.equal(Boolean(byId('chat-panel-input').querySelector('[data-skill="test-skill"]')), !commits);
+    });
+  });
+}
+
+test('a mode switch picked from an open menu is dropped once a prompt is being sent', async () => {
+  await mount({}, async ({ sessionId, switched }) => {
+    await click(byId('chat-panel-mode-select-trigger'));
+    const option = byId('chat-panel-mode-select-option', 'team');
+    beginPromptSubmit(sessionId);
+    try {
+      await click(option);
+    } finally {
+      endPromptSubmit(sessionId);
+    }
+    assert.deepEqual(switched, [], 'the prompt pressed first keeps the mode it was sent in');
+  });
+});
+
+test('a goal submitted while a mode switch is pending is held with its draft', async () => {
+  await mount({}, async ({ props, render, sessionId }) => {
+    const goals = [];
+    props.onSetGoal = (...args) => goals.push(args);
+    props.onSubmit = () => assert.fail('a held goal must not be submitted');
+    await act(async () => {
+      useGoalStore.getState().setArmed(sessionId, true);
+      useChatStore.getState().setModeSwitchPending(sessionId, true);
+    });
+    try {
+      await render();
+      await typeInput('finish the report');
+      await click(byId('chat-panel-input-send'));
+      assert.deepEqual(goals, []);
+      assert.deepEqual(useChatStore.getState().getRuntime(sessionId).taskQueue, []);
+      assert.equal(byId('chat-panel-input').textContent, 'finish the report', 'the draft stays for a later send');
+    } finally {
+      await act(async () => {
+        useChatStore.getState().setModeSwitchPending(sessionId, false);
+        useGoalStore.getState().setArmed(sessionId, false);
+      });
+    }
+  });
+});
+
+function loadSwitchSessionModeInPlace({ outcome, drained, toasts, sessionId }) {
+  const observed = { pendingDuringCommit: undefined, modes: [] };
+  const switchSessionModeInPlace = loadCallback('App.tsx', 'switchSessionModeInPlace', {
+    sessionModeCommitsRef: { current: new Set() },
+    useChatStore,
+    useSessionStore,
+    useWorkspaceStore,
+    commitSessionMode: async () => {
+      observed.pendingDuringCommit = useChatStore.getState().getRuntime(sessionId)?.modeSwitchPending;
+      return outcome;
+    },
+    request: async () => assert.fail('the commit is stubbed'),
+    resolveOutgoingMode: (_id, mode) => `${mode}.work.normal`,
+    stripPlanSuffix: (mode) => mode.split('.')[0],
+    setMode: (id, mode) => observed.modes.push([id, mode]),
+    queueActionAfterModeCommit,
+    drainTaskQueueIfIdle: (id) => drained.push(id),
+    t: (key) => key,
+    toast: { open: (options) => toasts.push(options.dataVariant) },
+  });
+  return { switchSessionModeInPlace, observed };
+}
+
+test('a committed mode switch releases the queue in the new mode', async () => {
+  const sessionId = 'mode-switch-commit-drains';
+  const chat = useChatStore.getState();
+  chat.ensureRuntime(sessionId);
+  try {
+    chat.addToTaskQueue(sessionId, 'waiting prompt');
+    const drained = [];
+    const toasts = [];
+    const { switchSessionModeInPlace, observed } = loadSwitchSessionModeInPlace({
+      outcome: { status: 'committed', mode: 'team.work.normal', changed: true }, drained, toasts, sessionId,
+    });
+    assert.equal(await switchSessionModeInPlace(sessionId, 'agent', 'team'), true);
+    assert.equal(observed.pendingDuringCommit, true, 'prompts are held while mode.set is in flight');
+    assert.equal(chat.getRuntime(sessionId).modeSwitchPending, false);
+    assert.deepEqual(observed.modes, [[sessionId, 'team']]);
+    assert.deepEqual(drained, [sessionId]);
+    assert.equal(chat.getRuntime(sessionId).queuePaused, false);
+    assert.deepEqual(toasts, []);
+  } finally {
+    chat.removeRuntime(sessionId);
+  }
+});
+
+for (const outcome of [
+  { status: 'busy' },
+  { status: 'failed', code: 'BAD_REQUEST', error: new Error('refused') },
+  { status: 'uncertain', error: new Error('lost') },
+  { status: 'not_applied', mode: 'agent.work.normal' },
+]) {
+  test(`a mode switch that ends ${outcome.status} keeps waiting prompts queued and paused`, async () => {
+    const sessionId = `mode-switch-${outcome.status}-pauses`;
+    const chat = useChatStore.getState();
+    chat.ensureRuntime(sessionId);
+    try {
+      chat.addToTaskQueue(sessionId, 'waiting prompt');
+      const drained = [];
+      const toasts = [];
+      const { switchSessionModeInPlace } = loadSwitchSessionModeInPlace({ outcome, drained, toasts, sessionId });
+      assert.equal(await switchSessionModeInPlace(sessionId, 'agent', 'team'), false);
+      const runtime = chat.getRuntime(sessionId);
+      assert.equal(runtime.modeSwitchPending, false);
+      assert.deepEqual(drained, [], 'nothing is sent in a mode the user did not expect');
+      assert.equal(runtime.queuePaused, true);
+      assert.deepEqual(runtime.taskQueue.map((task) => task.content), ['waiting prompt']);
+      assert.deepEqual(toasts, [outcome.status]);
+    } finally {
+      chat.removeRuntime(sessionId);
+    }
+  });
+}
+
+test('a mode switch reports whether this Session switched in place', async () => {
+  const sessionId = 'mode-switch-result';
+  const chat = useChatStore.getState();
+  chat.ensureRuntime(sessionId);
+  const load = (overrides) => loadCallback('App.tsx', 'handleSwitchMode', {
+    sessionIdRef: { current: sessionId },
+    useChatStore,
+    isPromptSubmitInFlight,
+    useSessionStore: { getState: () => ({ getRuntime: () => ({ mode: 'agent' }) }) },
+    NEW_CONVERSATION_ID: 'new',
+    setMode: () => {},
+    canSwitchSessionModeInPlace: () => true,
+    isEnterprise: () => false,
+    getWebTransport: () => 'websocket',
+    switchSessionModeInPlace: async () => true,
+    enterNewConversation: () => {},
+    ...overrides,
+  });
+  try {
+    assert.equal(await load({})('team'), true);
+    assert.equal(await load({ switchSessionModeInPlace: async () => false })('team'), false);
+    assert.equal(await load({ sessionIdRef: { current: 'new' } })('team'), true, 'a draft switches at once');
+    const opened = [];
+    const fresh = load({ canSwitchSessionModeInPlace: () => false, enterNewConversation: (mode) => opened.push(mode) });
+    assert.equal(await fresh('team'), false, 'a fresh conversation leaves this Session as it was');
+    assert.deepEqual(opened, ['team']);
+    chat.setProcessing(sessionId, true);
+    assert.equal(await load({})('team'), false);
+  } finally {
+    chat.removeRuntime(sessionId);
+  }
+});
+
+test('a mode switch is refused from the moment a prompt is submitted', async () => {
+  const sessionId = 'mode-switch-after-prompt';
+  const chat = useChatStore.getState();
+  chat.ensureRuntime(sessionId);
+  const switches = [];
+  const handleSwitchMode = loadCallback('App.tsx', 'handleSwitchMode', {
+    sessionIdRef: { current: sessionId },
+    useChatStore,
+    isPromptSubmitInFlight,
+    useSessionStore: { getState: () => ({ getRuntime: () => ({ mode: 'agent' }) }) },
+    NEW_CONVERSATION_ID: 'new',
+    setMode: () => assert.fail('a saved Session switches in place'),
+    canSwitchSessionModeInPlace: () => true,
+    isEnterprise: () => false,
+    getWebTransport: () => 'websocket',
+    switchSessionModeInPlace: (...args) => switches.push(args),
+    enterNewConversation: () => assert.fail('a saved Session switches in place'),
+  });
+  let releaseFlush;
+  const sentPrompts = [];
+  const handleSendMessage = loadCallback('components/ChatPanel/index.tsx', 'handleSendMessage', {
+    takeNextInputSubmission: () => ({ provenance: { input_origin: 'manual_free_text' }, settle() {} }),
+    activeSessionId: sessionId,
+    beginPromptSubmit,
+    endPromptSubmit,
+    // A plugin flush keeps the prompt between "send pressed" and the actual send.
+    flushApplicationConversationHistory: () => new Promise((resolve) => { releaseFlush = resolve; }),
+    toast: { open: () => assert.fail('the flush succeeds') },
+    t: (key) => key,
+    setIsSending() {},
+    // The real send path marks the Session busy before its first await.
+    onSendMessage: (content) => {
+      sentPrompts.push(content);
+      chat.setProcessing(sessionId, true);
+      return Promise.resolve(sessionId);
+    },
+    visibleTopicSlateRef: { current: null },
+    acceptingDynamicRef: { current: false },
+    ensureTopicStarterExposureAcknowledged: async () => {},
+    sendTopicStarterEvent: async () => {},
+    buildDirectInputEvent: () => ({}),
+    setTopicStarterErrorKey() {},
+  });
+  try {
+    const submitted = handleSendMessage('prompt pressed first');
+    handleSwitchMode('team');
+    assert.deepEqual(switches, [], 'refused while the prompt is still being prepared');
+    releaseFlush();
+    await submitted;
+    assert.deepEqual(sentPrompts, ['prompt pressed first']);
+    assert.equal(isPromptSubmitInFlight(sessionId), false);
+    handleSwitchMode('team');
+    assert.deepEqual(switches, [], 'refused while the prompt runs');
+    chat.setProcessing(sessionId, false);
+    handleSwitchMode('team');
+    assert.deepEqual(switches, [[sessionId, 'agent', 'team']]);
+  } finally {
+    chat.removeRuntime(sessionId);
+  }
 });

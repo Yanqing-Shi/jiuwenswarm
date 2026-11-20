@@ -20,7 +20,6 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from agent_gateway.common.mode_matrix import (
-    NEW_CANONICAL_MODES,
     base_mode_without_plan,
     deprecate_mode,
     is_code_profile_mode,
@@ -71,6 +70,8 @@ from jiuwenswarm.runtime.session_lifecycle import (
     SessionKind,
     SessionLifecycleTarget,
     SessionRuntimeLifecyclePort,
+    SessionRunEndEvent,
+    SessionRunEndReason,
 )
 from jiuwenswarm.runtime.session_lifecycle import (
     SessionDescriptor as LifecycleSessionDescriptor,
@@ -447,6 +448,8 @@ class AgentRuntime:
             tuple[str, str],
             tuple[SessionLifecycleTarget, tuple[Any, ...]],
         ] = {}
+        self._session_run_end_tasks: dict[str, tuple[int, asyncio.Task[None]]] = {}
+        self._session_runtime_locks: dict[str, asyncio.Lock] = {}
         if team_execution_controller is not None:
             set_reporter = getattr(
                 team_execution_controller,
@@ -1050,7 +1053,7 @@ class AgentRuntime:
             target.mode,
             work_mode=target.work_mode,
         ):
-            raise ValueError(f"target session is not Work/Code Normal: {target_id}")
+            raise ValueError(f"target session is not a Work/Code Session: {target_id}")
         if source.user_id != target.user_id:
             raise PermissionError("source and target sessions have different owners")
         from jiuwenswarm.common.schema.agent import AgentRequest
@@ -1278,12 +1281,14 @@ class AgentRuntime:
                 generation=snapshot.generation,
                 stop_runner=True,
             )
-        claim_runtime(session_id)
-        await self._session_coordinator.register_session(
-            session_id,
-            channel_id,
-            SessionPersistencePolicy.PERSISTENT,
-        )
+        lock = self._session_runtime_locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            claim_runtime(session_id)
+            await self._session_coordinator.register_session(
+                session_id,
+                channel_id,
+                SessionPersistencePolicy.PERSISTENT,
+            )
 
     def _owns_session(self, session_id: str | None) -> bool:
         """Return whether the Coordinator owns the current Session generation."""
@@ -1301,20 +1306,13 @@ class AgentRuntime:
         work_mode: object = None,
     ) -> bool:
         """Return whether a mode uses the single-Agent Session Runtime."""
-        from agent_gateway.common.mode_matrix import (
-            NEW_AGENT_CODE_NORMAL,
-            NEW_AGENT_WORK_NORMAL,
-        )
         from jiuwenswarm.runtime.request import resolve_agent_request_mode
 
         _mode, _sub_mode, canonical = resolve_agent_request_mode(
             mode,
             work_mode=work_mode,
         )
-        return deprecate_mode(canonical) in {
-            NEW_AGENT_WORK_NORMAL,
-            NEW_AGENT_CODE_NORMAL,
-        }
+        return is_single_agent_mode(deprecate_mode(canonical))
 
     async def _prepare_chat_turn(
         self,
@@ -1362,6 +1360,46 @@ class AgentRuntime:
             self._team_execution_controller.activate()
         return prepared
 
+    @staticmethod
+    def _ask_user_stop_timestamp(request: AgentRequest, intent: str, is_team: bool) -> float | None:
+        from e2a.constants import (
+            E2A_CANCEL_SOURCE_CLIENT_DISCONNECT,
+            E2A_INTERNAL_CANCEL_SOURCE_KEY,
+        )
+        from jiuwenswarm.enterprise.edition import is_enterprise
+
+        if request.channel_id != "web" or not is_enterprise():
+            return None
+        if intent not in {"cancel", "stop"} and not (is_team and intent == "pause"):
+            return None
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        if metadata.get(E2A_INTERNAL_CANCEL_SOURCE_KEY) == E2A_CANCEL_SOURCE_CLIENT_DISCONNECT:
+            return None
+        # Use the time the stop was requested so a later question stays interactive.
+        return time.time()
+
+    async def _record_ask_user_stop(
+        self, request: AgentRequest, stopped_at: float, question_ids: set[str] | None
+    ) -> None:
+        from jiuwenswarm.server.runtime.session.history_io import run_history_io
+        from jiuwenswarm.server.runtime.session.session_history import enqueue_ask_user_stop, wait_for_history_receipt
+
+        if not request.session_id:
+            return
+        try:
+            async with self._tenant.scoped_manager(request):
+                receipt = await run_history_io(
+                    enqueue_ask_user_stop,
+                    session_id=request.session_id,
+                    request_id=request.request_id,
+                    timestamp=stopped_at,
+                    question_ids=question_ids,
+                )
+                if receipt is not None:
+                    await wait_for_history_receipt(receipt)
+        except Exception:  # noqa: BLE001
+            logger.exception("[Runtime] Failed to record ask_user stop: session_id=%s", request.session_id)
+
     async def cancel_request(
         self,
         request: AgentRequest,
@@ -1390,6 +1428,8 @@ class AgentRuntime:
             else None
         )
         is_team_request = self._request_targets_team(request)
+        stopped_at = self._ask_user_stop_timestamp(request, intent, is_team_request)
+        team_stopped = False
         team_paused = False
         target_request_id = str(params.get("target_request_id") or "").strip()
         # Only the web cron path fences a specific execution. Other transports
@@ -1466,6 +1506,11 @@ class AgentRuntime:
                 producer_stopped and not result.timed_out
                 if result is not None else bool(owners)
             )
+            if stop_confirmed and stopped_at is not None and targets:
+                question_ids = set()
+                for target in targets:
+                    question_ids.update(target.waiting_control_ids)
+                await self._record_ask_user_stop(request, stopped_at, question_ids)
             return AgentResponse(
                 request_id=request.request_id, channel_id=request.channel_id, ok=True,
                 payload={
@@ -1487,7 +1532,7 @@ class AgentRuntime:
                     channel_id=request.channel_id,
                 )
             elif intent in {"cancel", "stop"}:
-                await self._team_lifecycle().stop_session(
+                team_stopped = await self._team_lifecycle().stop_session(
                     context,
                     reason=ExecutionCancelCause.USER_CANCEL.value,
                 )
@@ -1508,16 +1553,8 @@ class AgentRuntime:
                 and isinstance(response.payload, dict)
                 and response.payload.get("success") is True
             )
-        if (
-            response.ok
-            and intent in {"cancel", "supplement"}
-            and not (
-                isinstance(response.payload, dict)
-                and response.payload.get("success") is False
-            )
-        ):
-            await self._clear_pending_interaction(request.session_id or "default")
         cancellation_drained = True
+        executions_cancelled = False
         # 单 Agent 的 pause 只挂起 ReAct 循环：StreamEventRail 在下一个
         # checkpoint 阻塞，resume 后同一条流继续产出。协调器取消会直接杀掉
         # producer 且不产终止帧，前端/Gateway 永远等不到 chat.processing_status。
@@ -1544,6 +1581,7 @@ class AgentRuntime:
                 excluded_execution_ids=excluded_execution_ids,
             )
             cancellation_drained = not cancellation.timed_out
+            executions_cancelled = cancellation.cancelled > 0
             if team_paused and not cancellation_drained:
                 logger.warning(
                     "[Runtime] Team pause completion skipped after cancellation timeout: session_id=%s "
@@ -1552,11 +1590,33 @@ class AgentRuntime:
                     snapshot.generation if snapshot is not None else None,
                     cancellation.timed_out,
                 )
+        # Clear once the executions stop, since a cancelled answer restores its questions as it unwinds.
+        if (
+            response.ok
+            and intent in {"cancel", "supplement"}
+            and not (
+                isinstance(response.payload, dict)
+                and response.payload.get("success") is False
+            )
+        ):
+            await self._clear_pending_interaction(request.session_id or "default")
         if team_paused and cancellation_drained:
             await self._publish_team_pause_completed(
                 request,
                 generation=snapshot.generation if snapshot is not None else None,
             )
+        stop_confirmed = team_stopped or team_paused or executions_cancelled or (
+            response.ok and isinstance(response.payload, dict) and response.payload.get("success") is True
+        )
+        if stopped_at is not None and cancellation_drained and stop_confirmed:
+            question_ids = None
+            if target_request_id:
+                question_ids = set()
+                executions = snapshot.executions if snapshot is not None else ()
+                for execution in executions:
+                    if target_request_id in (execution.request_id, execution.root_request_id):
+                        question_ids.update(execution.waiting_control_ids)
+            await self._record_ask_user_stop(request, stopped_at, question_ids)
         return response
 
     async def _publish_team_pause_completed(
@@ -1802,11 +1862,12 @@ class AgentRuntime:
         _agent_execution: RuntimeAgentExecution | None,
     ) -> list[RuntimeEvent]:
         """Classify the request from the current mode and run it once."""
-        request = await self._normalize_tui_chat_after_claim(request)
+        request = await self._normalize_chat_after_claim(request)
         attachment_completion = self._non_team_attachment_completion(request)
         if attachment_completion is not None:
             return [attachment_completion]
         self._validate_permission_answer(request)
+        self._validate_answer_source(request)
         if self._is_session_input_request(request):
             async with aclosing(self.stream(
                 request, trigger_hook=trigger_hook, on_control_event=on_control_event,
@@ -2358,12 +2419,13 @@ class AgentRuntime:
             set_runtime_context,
         )
 
-        request = await self._normalize_tui_chat_after_claim(request)
+        request = await self._normalize_chat_after_claim(request)
         attachment_completion = self._non_team_attachment_completion(request)
         if attachment_completion is not None:
             yield attachment_completion
             return
         self._validate_permission_answer(request)
+        self._validate_answer_source(request)
         is_session_input = self._is_session_input_request(request)
         is_team_session_message = (
             self._request_targets_team(request)
@@ -3246,6 +3308,7 @@ class AgentRuntime:
         session_id: str,
         reset_plan_state: bool = True,
         request: AgentRequest | None = None,
+        end_reason: SessionRunEndReason = SessionRunEndReason.OTHER,
     ) -> bool:
         """Release in-memory resources owned by one Runtime session.
 
@@ -3260,12 +3323,31 @@ class AgentRuntime:
         steps have committed.  Ordinary disconnect and process-CLI cleanup use
         the default and release both resources together.
         """
+        reason = SessionRunEndReason(end_reason)
+        lock = self._session_runtime_locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            return await self._cleanup_session_run(
+                channel_id=channel_id, session_id=session_id,
+                reset_plan_state=reset_plan_state, reason=reason, request=request,
+            )
+
+    async def _cleanup_session_run(
+        self,
+        *,
+        channel_id: str,
+        session_id: str,
+        reset_plan_state: bool,
+        reason: SessionRunEndReason,
+        request: AgentRequest | None,
+    ) -> bool:
+        """Keep a resumed generation out until old-run cleanup finishes."""
         if self._closed:
             raise RuntimeStateError("runtime is already closed")
         if self._owns_session(session_id):
             result = await self._session_coordinator.close_session(session_id)
             if result.timed_out:
                 raise SessionCloseTimeoutError(session_id, result.timed_out)
+        await self._notify_session_run_end(session_id, reason=reason)
         if request is not None:
             managers = [await self.resolve_manager(request)]
         else:
@@ -3288,6 +3370,50 @@ class AgentRuntime:
         if reset_plan_state:
             self._plan_controller.reset_session(session_id)
         return cleaned
+
+    async def _notify_session_run_end(
+        self,
+        session_id: str,
+        *,
+        reason: SessionRunEndReason,
+    ) -> None:
+        """Join the single notification attempt for a closed session generation."""
+        snapshot = self._session_coordinator.snapshot_session(session_id)
+        if snapshot is None or snapshot.state is not RuntimeSessionState.CLOSED:
+            return
+        ending = self._session_run_end_tasks.get(session_id)
+        if ending is None or ending[0] != snapshot.generation:
+            target = self._participant_registry.target(session_id)
+            if target is None:
+                team = any(execution.team for execution in snapshot.executions)
+                target = SessionLifecycleTarget(
+                    LifecycleSessionDescriptor(
+                        session_id=session_id, channel_id=snapshot.channel_id,
+                        mode="team" if team else "agent", work_mode="",
+                    ),
+                    SessionKind.TEAM if team else SessionKind.AGENT,
+                )
+            event = SessionRunEndEvent(target, snapshot.generation, reason)
+            task = asyncio.create_task(self._dispatch_session_run_end(event), name="runtime-session-run-end")
+            ending = (snapshot.generation, task)
+            self._session_run_end_tasks[session_id] = ending
+        elif ending[1].done():
+            # Cancellation ends this attempt too. A later cleanup must still
+            # release resources without replaying or re-raising that attempt.
+            return
+        try:
+            await asyncio.shield(ending[1])
+        except asyncio.CancelledError:
+            ending[1].cancel()
+            raise
+
+    async def _dispatch_session_run_end(self, event: SessionRunEndEvent) -> None:
+        """Observe a real run end without giving observers ownership of release."""
+        for participant in self._participant_registry.snapshot_run_end():
+            try:
+                await participant.session_run_ended(event)
+            except Exception as exc:
+                logger.warning("Runtime session run-end participant failed: %s", exc, exc_info=True)
 
     def begin_chat_request(self, session_id: str, request_id: str) -> None:
         self._pending_chat_requests.setdefault(session_id, set()).add(request_id)
@@ -3342,7 +3468,7 @@ class AgentRuntime:
                 expected_mode=expected_mode,
                 channel_id=channel_id,
                 user_id=user_id,
-                busy_at_acquisition=self._session_mode_switch_busy(session_id),
+                busy_at_acquisition=self._session_mode_switch_busy_reason(session_id),
             )
 
     def _switch_session_mode_locked(
@@ -3353,9 +3479,9 @@ class AgentRuntime:
         expected_mode: str | None,
         channel_id: str,
         user_id: str,
-        busy_at_acquisition: bool,
+        busy_at_acquisition: str | None,
     ) -> dict[str, Any]:
-        """Synchronously commit a TUI route while retaining project ownership."""
+        """Synchronously commit a Session route while retaining project ownership."""
         from jiuwenswarm.server.runtime.session.session_history import (
             append_session_mode_changed,
         )
@@ -3364,30 +3490,39 @@ class AgentRuntime:
             SessionModeConflictError,
             compare_and_set_session_mode,
             get_session_metadata,
-            normalize_tui_session_mode,
+            mode_switch_session_visible_to,
+            normalize_switchable_session_mode,
+            session_mode_switch_blocker,
         )
 
-        if target_mode not in NEW_CANONICAL_MODES or target_mode == "team.design":
+        if normalize_switchable_session_mode(target_mode) != target_mode:
             raise SessionModeSwitchError("unsupported mode", code="BAD_REQUEST")
         metadata = get_session_metadata(
             session_id, cache_bust=True, enable_writeback=False,
         )
-        if not metadata:
+        if not metadata or not mode_switch_session_visible_to(
+            metadata, channel_id=channel_id, user_id=user_id,
+        ):
             raise SessionModeSwitchError("session not found", code="NOT_FOUND")
-        if metadata.get("channel_id") not in (None, "", "tui"):
-            raise SessionModeSwitchError("session not found", code="NOT_FOUND")
-        stored_user_id = str(metadata.get("user_id") or "").strip()
-        if stored_user_id and stored_user_id != user_id:
-            raise SessionModeSwitchError("session not found", code="NOT_FOUND")
-        already_current = normalize_tui_session_mode(metadata.get("mode")) == target_mode
+        blocker = session_mode_switch_blocker(metadata)
+        if blocker is not None:
+            raise SessionModeSwitchError(blocker, code="BAD_REQUEST")
+        already_current = normalize_switchable_session_mode(metadata.get("mode")) == target_mode
         # A run that arrived before this switch keeps the mode it was sent in,
         # even if it has not started yet: the switch is refused. Runs arriving
         # after ownership was taken wait for the new mode and cannot veto it.
-        if not already_current and busy_at_acquisition:
+        busy_reason = None if already_current else busy_at_acquisition
+        if busy_reason is not None:
+            # SESSION_BUSY alone cannot be diagnosed; name the signal that refused.
+            logger.info(
+                "Session mode switch refused as busy: session=%s target=%s reason=%s",
+                session_id, target_mode, busy_reason,
+            )
             raise SessionModeSwitchError("session is busy", code="SESSION_BUSY")
         try:
             previous_mode, written, changed = compare_and_set_session_mode(
-                session_id, target_mode, expected_mode, user_id=user_id,
+                session_id, target_mode, expected_mode,
+                channel_id=channel_id, user_id=user_id,
             )
         except SessionModeConflictError as exc:
             raise SessionModeSwitchError(str(exc), code="MODE_CONFLICT") from exc
@@ -3414,25 +3549,25 @@ class AgentRuntime:
         }
 
     @staticmethod
-    def get_session_mode(*, session_id: str, user_id: str) -> dict[str, Any]:
-        """Return the persisted TUI route for an uncertain client retry."""
+    def get_session_mode(*, session_id: str, channel_id: str, user_id: str) -> dict[str, Any]:
+        """Return the persisted Session route for an uncertain client retry."""
         from jiuwenswarm.server.runtime.session.session_metadata import (
             get_session_metadata,
-            normalize_tui_session_mode,
+            mode_switch_session_visible_to,
+            normalize_switchable_session_mode,
         )
 
         metadata = get_session_metadata(
             session_id, cache_bust=True, enable_writeback=False,
         )
-        if not metadata or metadata.get("channel_id") not in (None, "", "tui"):
+        if not metadata or not mode_switch_session_visible_to(
+            metadata, channel_id=channel_id, user_id=user_id,
+        ):
             raise SessionModeSwitchError("session not found", code="NOT_FOUND")
-        stored_user_id = str(metadata.get("user_id") or "").strip()
-        if stored_user_id and stored_user_id != user_id:
-            raise SessionModeSwitchError("session not found", code="NOT_FOUND")
-        mode = normalize_tui_session_mode(metadata.get("mode"))
+        mode = normalize_switchable_session_mode(metadata.get("mode"))
         if mode is None:
             raise SessionModeSwitchError(
-                "session mode is unknown; use /mode to choose an explicit mode",
+                "session mode is unknown; choose an explicit mode",
                 code="MODE_UNKNOWN",
             )
         return {
@@ -3441,32 +3576,34 @@ class AgentRuntime:
             "project_id": metadata.get("project_id"),
         }
 
-    def _session_mode_switch_busy(self, session_id: str) -> bool:
-        """Whether a run arrived, is queued, or is active for this Session."""
+    def _session_mode_switch_busy_reason(self, session_id: str) -> str | None:
+        """Name the signal that keeps a Session busy for mode.set, or None when idle."""
         pending = self._pending_chat_requests.get(session_id)
         if pending and not self.has_parked_team_streams(session_id):
-            return True
+            return f"pending_chat_requests={sorted(pending)}"
         controller = self._admission_controller
         for name in ("is_user_active", "is_heartbeat_active", "has_pending_interaction"):
             probe = getattr(controller, name, None)
             if callable(probe) and probe(session_id):
-                return True
+                return f"admission.{name}"
         snapshot = self._session_coordinator.snapshot_session(session_id)
-        if snapshot and any(
-            execution.state in {
+        for execution in snapshot.executions if snapshot else ():
+            if execution.state in {
                 SessionExecutionState.QUEUED,
                 SessionExecutionState.RUNNING,
                 SessionExecutionState.WAITING_FOR_CONTROL,
-            }
-            or (
+            } or (
                 execution.state is SessionExecutionState.WAITING_FOR_INPUT
                 and not (execution.team and execution.team.observation_only)
                 and not self.has_parked_team_streams(session_id)
-            )
-            for execution in snapshot.executions
-        ):
-            return True
-        return self.is_session_running(session_id)
+            ):
+                return (
+                    f"execution request={execution.request_id} kind={execution.work_kind.value} "
+                    f"state={execution.state.value}"
+                )
+        if self.is_session_running(session_id):
+            return "team_session_running"
+        return None
 
     def is_session_running(
         self, session_id: str, *, ignore_heartbeats: bool = False
@@ -3498,14 +3635,15 @@ class AgentRuntime:
         return is_team_session_running(session_id)
 
     def has_parked_team_streams(self, session_id: str) -> bool:
-        """Whether every pending chat request is parked on a released Team round.
+        """Whether pending chat requests only observe or park on released rounds.
 
         A Team first-request handler stays alive for the whole persistent
         leader stream; once its round was released it no longer owns team
         work, only the parked response stream.  Lifecycle actions may pass
         such handlers and leave that stream alone.  A request still
         preparing or mid-round has no released-round marker, so mixed states
-        keep the Session running.
+        keep the Session running. Registered attach-only subscriptions never
+        own a round and do not require a released-round marker.
         """
         requests = getattr(self, "_pending_chat_requests", {}).get(session_id)
         if not requests:
@@ -3806,6 +3944,7 @@ class AgentRuntime:
                 "STOP_TIMEOUT",
                 "runtime executions have not stopped",
             )
+        await self._notify_session_run_end(session_id, reason=SessionRunEndReason.OTHER)
 
     async def _dispose_agent_session_after_resource_release(
         self,
@@ -3829,7 +3968,11 @@ class AgentRuntime:
             reset_plan_state=False,
         )
 
-    async def close(self) -> None:
+    async def close(
+        self,
+        *,
+        end_reason: SessionRunEndReason = SessionRunEndReason.OTHER,
+    ) -> None:
         """Release resources unless a Session provision is unfinished.
 
         The check is fail-fast rather than a wait or implicit abort: only the
@@ -3840,6 +3983,7 @@ class AgentRuntime:
         Runtime releases only its non-owning application-resource lease. The
         application composition root remains responsible for shared shutdown.
         """
+        reason = SessionRunEndReason(end_reason)
         async with self._lifecycle_lock:
             if self._closed:
                 return
@@ -3899,8 +4043,6 @@ class AgentRuntime:
                 await self._session_provisioner.close_background_tasks()
             except BaseException as exc:
                 cleanup_errors.append(exc)
-            self._activity_executions.clear()
-            self._participant_registry.clear_targets()
             try:
                 for manager in self._tenant.iter_managers_for_host_event():
                     await manager.cancel_all_inflight_work("[runtime close] ")
@@ -3908,6 +4050,18 @@ class AgentRuntime:
                 BaseException
             ) as exc:  # preserve cancellation until cleanup completes
                 cleanup_errors.append(exc)
+            # All execution and manager-owned work has stopped, while extension
+            # handlers and platform resources are still available. Share the
+            # notification budget across sessions before releasing their targets.
+            try:
+                await asyncio.gather(*(
+                    self._notify_session_run_end(snapshot.session_id, reason=reason)
+                    for snapshot in self._session_coordinator.snapshot_sessions()
+                ))
+            except BaseException as exc:
+                cleanup_errors.append(exc)
+            self._activity_executions.clear()
+            self._participant_registry.clear_targets()
             if self._resource_lease is not None:
                 try:
                     await self._resource_lease.release()
@@ -3982,6 +4136,23 @@ class AgentRuntime:
         if not isinstance(answers, list):
             raise InteractionAnswerError("answers must be a list")
         validate_answer_items(answers)
+
+    @classmethod
+    def _validate_answer_source(cls, request: AgentRequest) -> None:
+        """Reject answers carried under an unknown source (#6285).
+
+        Runs before session lane admission; the raised
+        ``InteractionAnswerError`` reaches the client as an error response
+        frame instead of the request deadlocking behind the interaction
+        still waiting for those answers.
+        """
+        params = request.params if isinstance(request.params, dict) else {}
+        if request.req_method is not ReqMethod.CHAT_SEND:
+            return
+        # pylint: disable-next=import-outside-toplevel
+        from jiuwenswarm.runtime.interaction import validate_answer_source
+
+        validate_answer_source(params)
 
     @staticmethod
     def _is_interrupt_resume_request(request: AgentRequest) -> bool:
@@ -4193,6 +4364,7 @@ class AgentRuntime:
         if not session_id:
             return request
         from jiuwenswarm.server.runtime.session.session_metadata import (
+            MODE_SWITCH_CHANNELS,
             get_session_metadata,
         )
 
@@ -4223,7 +4395,8 @@ class AgentRuntime:
             if not isinstance(work_mode, str) or work_mode.strip().lower() not in {"code", "work"}:
                 work_mode = "code" if is_code_profile_mode(resolved_mode) else "work"
             requested_mode = resolve_request_runtime_mode(request, work_mode=work_mode)
-            if request.channel_id == "tui" and "mode_revision" in metadata:
+            # A committed mode.set fixes the route; chat may only drift plan state.
+            if request.channel_id in MODE_SWITCH_CHANNELS and "mode_revision" in metadata:
                 if base_mode_without_plan(requested_mode.canonical_mode) == base_mode_without_plan(
                     resolved_mode
                 ):
@@ -4241,16 +4414,22 @@ class AgentRuntime:
             normalized_params["work_mode"] = metadata["work_mode"]
         return replace(request, params=normalized_params)
 
-    async def _normalize_tui_chat_after_claim(self, request: AgentRequest) -> AgentRequest:
-        """Claim a persisted TUI Session before deciding its chat work kind.
+    async def _normalize_chat_after_claim(self, request: AgentRequest) -> AgentRequest:
+        """Claim a persisted mode-switch Session before deciding its chat work kind.
 
         A mode.set in another AgentServer may commit between an early route
         read and Runtime admission. Claiming first and then reading metadata
         again makes the subsequent Agent/Team classification use the committed
         mode; mode.set cannot commit after the claim while this owner is live.
         """
+        from jiuwenswarm.server.runtime.session.session_metadata import (
+            MODE_SWITCH_CHANNELS,
+            get_session_metadata,
+            mode_switch_channel_owns,
+        )
+
         if (
-            request.channel_id == "tui"
+            request.channel_id in MODE_SWITCH_CHANNELS
             and request.session_id
             and request.req_method in self._chat_turn_methods()
         ):
@@ -4265,8 +4444,6 @@ class AgentRuntime:
                 await self._ensure_session_registered(request)
                 return self.normalize_request(request)
 
-            from jiuwenswarm.server.runtime.session.session_metadata import get_session_metadata
-
             try:
                 metadata = get_session_metadata(
                     request.session_id, cache_bust=True, enable_writeback=False,
@@ -4277,7 +4454,7 @@ class AgentRuntime:
                     request.session_id, exc,
                 )
                 metadata = None
-            if metadata and metadata.get("channel_id") in (None, "", "tui"):
+            if metadata and mode_switch_channel_owns(metadata, request.channel_id):
                 await self._ensure_session_registered(request)
         return self.normalize_request(request)
 
@@ -4802,6 +4979,10 @@ class AgentRuntime:
 
     async def _ensure_extensions(self) -> None:
         self._shared_extensions_acquired = await _acquire_process_runtime_extensions()
+        if not self._participant_registry.snapshot_run_end():
+            from jiuwenswarm.server.runtime.session.end_notifications import ExtensionSessionEndParticipant
+
+            self._participant_registry.register_host_run_end(ExtensionSessionEndParticipant())
         # Shipped AgentGroups must be usable on first start; a bad package only warns.
         try:
             from jiuwenswarm.server.runtime.extension_package_manager import (

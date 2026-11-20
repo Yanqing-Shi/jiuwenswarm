@@ -272,12 +272,69 @@ const MODEL_VALUE_SEPARATOR = "\x00";
 const MODEL_FORM_FIELDS: ModelFormField[] = ["model_name", "alias", "api_base", "api_key", "model_provider", "reasoning_level"];
 const MODEL_REQUIRED_FIELDS: ModelFormField[] = ["model_name", "api_base", "api_key", "model_provider"];
 const DEFAULT_MODEL_PROVIDER = "OpenAI";
-const MODEL_PROVIDER_OPTIONS = ["OpenAI", "OpenRouter", "DashScope", "SiliconFlow", "AscendAffinity", "DeepSeek"];
+const OPENCODE_GO_OPTION = "OpenCode Go";
+const OPENCODE_GO_VENDOR_KEY = "opencode-go";
+export const MODEL_PROVIDER_OPTIONS = ["OpenAI", "OpenRouter", "DashScope", "SiliconFlow", "AscendAffinity", "DeepSeek", OPENCODE_GO_OPTION];
 const REASONING_LEVEL_OPTIONS = ["", "off", "low", "medium", "high"];
 const MAX_MODEL_NAME_LENGTH = 100;
 const MAX_ALIAS_LENGTH = 100;
 const MAX_API_BASE_LENGTH = 512;
 const MAX_API_KEY_LENGTH = 2048;
+
+type ModelFormSnapshot = {
+  fields: Record<string, string>;
+  original: Record<string, string>;
+};
+
+/** Display value for the provider field: the stored vendor key wins over the wire provider. */
+export function modelFormProviderValue(
+  mode: "add" | "edit",
+  meta?: Pick<ModelMeta, "model_provider" | "vendor_key">,
+): string {
+  if (mode === "edit" && meta?.vendor_key === OPENCODE_GO_VENDOR_KEY) {
+    return OPENCODE_GO_OPTION;
+  }
+  return (mode === "edit" ? meta?.model_provider : undefined) || DEFAULT_MODEL_PROVIDER;
+}
+
+/** Map the provider form back to the wire provider plus the vendor identity. */
+export function modelFormConfigForSubmit(state: {
+  form?: ModelFormSnapshot | null;
+  inputMode?: "add" | "edit";
+}): Record<string, string> {
+  const form = state.form;
+  if (!form) return {};
+  const config: Record<string, string> = {};
+  for (const field of MODEL_FORM_FIELDS) {
+    const value = form.fields[field].trim();
+    const configKey = field === "model_provider" ? "provider" : field;
+    if (field === "model_provider") {
+      const wasOpenCode = form.original[field].trim() === OPENCODE_GO_OPTION;
+      if (value === OPENCODE_GO_OPTION) {
+        if (state.inputMode === "add" || !wasOpenCode) {
+          config.provider = DEFAULT_MODEL_PROVIDER;
+          config.vendor_key = OPENCODE_GO_VENDOR_KEY;
+        }
+        continue;
+      }
+      if (wasOpenCode) {
+        config.provider = value;
+        config.vendor_key = "";
+        continue;
+      }
+    }
+    if (state.inputMode === "edit") {
+      if (field === "api_key") {
+        if (value) config[configKey] = value;
+        continue;
+      }
+      if (value !== form.original[field]) config[configKey] = value;
+    } else if (value) {
+      config[configKey] = value;
+    }
+  }
+  return config;
+}
 
 type ToolSelectorState = {
   list: CheckboxList;
@@ -3331,9 +3388,6 @@ export class AppScreen implements Component, Focusable {
     const editorText = raw.trim();
     const text = this.expandPastedText(editorText).trim();
     if (!text) return;
-    // Editor clears before onSubmit and schedules paste-marker cleanup. Keep
-    // those markers available until the submit succeeds or its draft returns.
-    this.cancelPastedTextStateClear();
 
     // 更新用户活动时间戳（用于 auto-recap 空闲检测）
     this.state.recordActivity();
@@ -3537,7 +3591,14 @@ export class AppScreen implements Component, Focusable {
             extractedSkills,
           );
           if (!requestId) {
-            this.restoreUnsentChatInput(raw, snapshot.sessionId);
+            this.clearPendingSubmittedInput();
+            this.state.addItem({
+              kind: "error",
+              id: `offline-${Date.now()}`,
+              sessionId: snapshot.sessionId,
+              content: "offline: waiting for reconnect",
+              at: new Date().toISOString(),
+            });
             return;
           }
           this.editor.addToHistory(text);
@@ -3545,11 +3606,11 @@ export class AppScreen implements Component, Focusable {
           return;
         }
       }
-      // /mode delegates busy admission to the server without cancelling work.
-      if (/^\/switch\s/.test(text) && snapshot.cancellableWork) {
+      // Check for mode switch when there's ongoing work
+      if (/^\/(?:mode|switch)\s/.test(text) && snapshot.cancellableWork) {
         const currentMode = snapshot.mode;
         // Parse the target mode from the command
-        const modeMatch = text.match(/^\/switch\s+(\S+)/);
+        const modeMatch = text.match(/^\/(?:mode|switch)\s+(\S+)/);
         const targetMode = modeMatch?.[1] ?? "";
         if (currentMode !== targetMode) {
           const answers = await this.state.askQuestions(
@@ -3712,7 +3773,14 @@ export class AppScreen implements Component, Focusable {
       this.beginPendingSubmittedInput(text, snapshot);
       const requestId = this.state.supplement(content, attachments);
       if (!requestId) {
-        this.restoreUnsentChatInput(raw, snapshot.sessionId);
+        this.clearPendingSubmittedInput();
+        this.state.addItem({
+          kind: "error",
+          id: `offline-${Date.now()}`,
+          sessionId: snapshot.sessionId,
+          content: "offline: waiting for reconnect",
+          at: new Date().toISOString(),
+        });
         return;
       }
       this.editor.addToHistory(text);
@@ -3724,7 +3792,14 @@ export class AppScreen implements Component, Focusable {
     const extractedSkills = this.extractSkillsFromContent(content);
     const requestId = this.state.sendMessage(content, attachments, undefined, undefined, extractedSkills);
     if (!requestId) {
-      this.restoreUnsentChatInput(raw, snapshot.sessionId);
+      this.clearPendingSubmittedInput();
+      this.state.addItem({
+        kind: "error",
+        id: `offline-${Date.now()}`,
+        sessionId: snapshot.sessionId,
+        content: "offline: waiting for reconnect",
+        at: new Date().toISOString(),
+      });
       return;
     }
 
@@ -4003,24 +4078,6 @@ export class AppScreen implements Component, Focusable {
     }
   }
 
-  private restoreUnsentChatInput(raw: string, sessionId: string): void {
-    this.clearPendingSubmittedInput(false);
-    this.cancelPastedTextStateClear();
-    // Editor clears its text before onSubmit. The original @mentions keep
-    // attachments available, and the sidecar image previews remain intact.
-    this.editor.setText(raw);
-    if (this.state.getSnapshot().connectionStatus !== "connected") {
-      this.state.addItem({
-        kind: "error",
-        id: `offline-${Date.now()}`,
-        sessionId,
-        content: "offline: waiting for reconnect",
-        at: new Date().toISOString(),
-      });
-    }
-    this.tui.requestRender();
-  }
-
   private syncTeamPanelSelection(snapshot: ReturnType<CliPiAppState["getSnapshot"]>): void {
     const memberIds = orderedMemberIds(snapshot.teamMemberEvents, snapshot.teamMessageEvents);
     if (memberIds.length === 0) {
@@ -4232,7 +4289,7 @@ export class AppScreen implements Component, Focusable {
     try {
       await this.state.request("session.switch", {
         session_id: nextSessionId,
-        previous_session_id: this.state.getCommandContext().previousSessionId ?? previousSessionId,
+        previous_session_id: previousSessionId,
         previous_mode: snapshot.mode,
         mode: targetMode,
       });
@@ -4854,9 +4911,7 @@ export class AppScreen implements Component, Focusable {
       alias: mode === "edit" ? meta?.alias ?? "" : "",
       api_base: mode === "edit" ? meta?.api_base ?? "" : "",
       api_key: "",
-      model_provider: mode === "edit"
-        ? meta?.model_provider ?? DEFAULT_MODEL_PROVIDER
-        : DEFAULT_MODEL_PROVIDER,
+      model_provider: modelFormProviderValue(mode, meta),
       reasoning_level: mode === "edit" ? meta?.reasoning_level ?? "" : "",
     };
     return {
@@ -4963,27 +5018,7 @@ export class AppScreen implements Component, Focusable {
   }
 
   private modelFormConfigForSubmit(state: ModelListState): Record<string, string> {
-    const form = state.form;
-    if (!form) return {};
-    const config: Record<string, string> = {};
-    for (const field of MODEL_FORM_FIELDS) {
-      const value = form.fields[field].trim();
-      const configKey = field === "model_provider" ? "provider" : field;
-      if (state.inputMode === "edit") {
-        if (field === "api_key") {
-          if (value) config[configKey] = value;
-          continue;
-        }
-        if (field === "alias") {
-          if (value !== form.original[field]) config[configKey] = value;
-          continue;
-        }
-        if (value !== form.original[field]) config[configKey] = value;
-      } else if (value) {
-        config[configKey] = value;
-      }
-    }
-    return config;
+    return modelFormConfigForSubmit(state);
   }
 
   private handleModelListInput(data: string): void {

@@ -21,6 +21,7 @@ import { mergeTaskTimeline } from '../teamArea/groupChatTimeline';
 import { mergeEnterpriseTeamTasks } from '../../stores/teamSliceApply';
 import { TaskPlanningPanel } from '../teamArea/TaskPlanningPanel';
 import { TeamMembersPanel } from '../teamArea/TeamMembersPanel';
+import { TEAM_PANEL_MIN_WIDTH_PX } from '../teamArea/teamPanelLayout';
 import { CompactTaskList } from '../teamArea/CompactTaskList';
 import { RunGroupHeader } from '../teamArea/RunGroupHeader';
 import { groupByWorkflowRun } from '../teamArea/runGrouping';
@@ -29,6 +30,9 @@ import { CollapsibleSection } from './CollapsibleSection';
 import { TeamMemberAvatar } from '../TeamMemberAvatar';
 import { isTeamLeaderMember } from '../../utils/teamMemberAvatar';
 import { getMemberAvatarIdentity, getMemberAvatarKey, getMemberPlainName, type TabType, type TeamDetailTab } from '../teamArea/shared';
+import type { useWebUIPanels } from '../../features/webui';
+import PluginIcon from '../../assets/agent-management/extension.svg?react';
+
 import type { TeamMemberExecutionEvent, TeamTask, TeamTaskStatus } from '../../stores/sessionStore';
 import type { ProjectInfo, TodoItem, TodoStatus } from '../../types';
 import teamIcon from '../../assets/team.svg';
@@ -51,6 +55,7 @@ import { SubagentExpandedPanel } from '../subagent/SubagentExpandedPanel';
 import { useSubagentStore, selectSubagents } from '../../stores/subagentStore';
 import { useMinWidth } from '../../hooks/useResponsive';
 import { DesktopBrowserPane } from '../DesktopBrowserPane';
+import { AppMarketPreviewReload, AppMarketSessionPreview } from '../AppMarketPanel/AppMarketSessionPreview';
 import './ToolPanel.css';
 import { SessionAssetList } from '../../features/sessionAssets/SessionAssetList';
 import { selectSessionAssets, useSessionAssetsStore } from '../../features/sessionAssets/sessionAssets';
@@ -76,6 +81,7 @@ function todoItemToTeamTask(todo: TodoItem): TeamTask {
 }
 
 interface ToolPanelProps {
+  webUIPanels: ReturnType<typeof useWebUIPanels>;
   sessionId?: string;
   project?: ProjectInfo | null;
   isNewSessionPromotion?: boolean;
@@ -129,6 +135,7 @@ function mergeById<T>(historyItems: T[], currentItems: T[], getId: (item: T) => 
 }
 
 export function ToolPanel({
+  webUIPanels,
   sessionId,
   project = null,
   isNewSessionPromotion = false,
@@ -162,6 +169,7 @@ export function ToolPanel({
   const conversationId = useOrganizationConversationKey(activeSessionId);
   const mode = useSessionStore(s => s.runtimes[activeSessionId ?? '']?.mode ?? 'agent');
   const resolvedSessionId = sessionId ?? activeSessionId ?? '';
+  const appMarketPreview = useSessionStore(s => s.runtimes[resolvedSessionId]?.appMarketPreview);
   const teamMembers = useSessionStore(s => s.runtimes[conversationId]?.teamMembers ?? []);
   const teamConnectionPresentation = useSessionStore((s) =>
     s.runtimes[activeSessionId ?? '']?.mode === 'team'
@@ -181,7 +189,7 @@ export function ToolPanel({
   const [teamPlanningExpanded, setTeamPlanningExpanded] = useState(false);
   const [teamMembersExpanded, setTeamMembersExpanded] = useState(false);
   const [artifactsExpanded, setArtifactsExpanded] = useState(false);
-  const { completedTasks: teamCompletedTasks, teamTasks, totalTasks: teamTotalTasks } = useTaskPlanningMetrics();
+  const { teamTasks } = useTaskPlanningMetrics();
   const artifactsCount = useSessionArtifactsCount();
   const sessionAssetCount = useSessionAssetsStore(selectSessionAssets(activeSessionId)).length;
   const subagentCount = useSubagentStore(state => Object.keys(state.runtimes[resolvedSessionId]?.subagentsById ?? {}).length);
@@ -312,7 +320,13 @@ export function ToolPanel({
   });
   const codeReviewPanel =
     canReviewCode && codeProject && sessionId ? (
-      <CodeReviewPanel project={codeProject} sessionId={sessionId} target={codeReviewTarget} diffWatch={codeGitDiffWatch} isProcessing={isProcessing} />
+      <CodeReviewPanel
+        project={codeProject}
+        sessionId={sessionId}
+        target={codeReviewTarget}
+        diffWatch={codeGitDiffWatch}
+        isProcessing={isProcessing}
+      />
     ) : undefined;
   const todoTeamTasks = useMemo(() => todos.map(todoItemToTeamTask), [todos]);
   const applicationTasks = useApplicationTaskStore((s) => s.sessions[activeSessionId ?? ''] ?? EMPTY_APPLICATION_TASKS);
@@ -336,7 +350,10 @@ export function ToolPanel({
     () => [...applicationPlanningTasks, ...teamTasks],
     [applicationPlanningTasks, teamTasks],
   );
-  const applicationCompleted = applicationPlanningTasks.filter((task) => task.status === 'completed').length;
+  const teamCompletedTasks = useMemo(
+    () => teamTasks.filter((task) => task.status === 'completed').length,
+    [teamTasks],
+  );
   const todoCompletedTasks = planningTasks.filter((task) => task.status === 'completed').length;
   const hydratedTeamHistorySessionRef = useRef<string | null>(null);
   const loadingTeamHistorySessionRef = useRef<string | null>(null);
@@ -354,6 +371,11 @@ export function ToolPanel({
     (hasBrowserAgentActivity || desktopBrowserTabFlags.requested);
   const handleTabClose = (tab: string) => {
     if (tab === 'browser') closeDesktopBrowserTab();
+    else if (tab === 'app') useSessionStore.getState().setAppMarketPreview(resolvedSessionId, undefined);
+    else if (pluginPanels.some((panel) => panel.key === tab)) {
+      setClosedPluginKeys((previous) => new Set([...previous, tab]));
+      if (pluginSelection?.key === tab) setPluginSelection(null);
+    }
   };
 
   useEffect(() => {
@@ -504,6 +526,67 @@ export function ToolPanel({
   ]);
 
   const panelExpanded = mode === 'team' ? teamAreaExpanded : singleAgentPanelExpanded;
+  const nativePanelTab = mode === 'team' ? teamAreaActiveTab : singleAgentPanelActiveTab;
+  const { panels, renderPanel, openRequest, consumeOpenRequest } = webUIPanels;
+  const [pluginSelection, setPluginSelection] = useState<{
+    key: string; sessionId: string; mode: string; nativeTab: string;
+  } | null>(null);
+  const [closedPluginKeys, setClosedPluginKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const pluginPanels = panels
+    .filter((panel) => !closedPluginKeys.has(`webui:${panel.key}`))
+    .map((panel) => ({
+      key: `webui:${panel.key}`,
+      label: panel.title,
+      icon: <PluginIcon className="h-4 w-4 shrink-0" aria-hidden />,
+      closable: true,
+      content: renderPanel(panel.key),
+    }));
+  const selectedPluginPanel = pluginSelection?.sessionId === resolvedSessionId
+    && pluginSelection.mode === mode && pluginSelection.nativeTab === nativePanelTab
+    ? pluginPanels.find((panel) => panel.key === pluginSelection.key) : undefined;
+  const selectedPluginKey = selectedPluginPanel?.key;
+
+  useEffect(() => {
+    if (pluginSelection && !selectedPluginKey) setPluginSelection(null);
+  }, [pluginSelection, selectedPluginKey]);
+
+  useEffect(() => {
+    if (
+      !openRequest ||
+      openRequest.sessionId !== resolvedSessionId ||
+      mode === 'auto_harness' ||
+      !panels.some((panel) => panel.key === openRequest.key)
+    ) return;
+    const key = `webui:${openRequest.key}`;
+    setClosedPluginKeys((previous) => {
+      const next = new Set(previous);
+      next.delete(key);
+      return next;
+    });
+    setPluginSelection({ key, sessionId: resolvedSessionId, mode, nativeTab: nativePanelTab });
+    consumeOpenRequest(openRequest.id);
+  }, [
+    openRequest,
+    resolvedSessionId,
+    mode,
+    nativePanelTab,
+    panels,
+    consumeOpenRequest,
+  ]);
+
+  const handlePanelTabChange = (key: string) => {
+    if (pluginPanels.some((panel) => panel.key === key)) {
+      setPluginSelection({ key, sessionId: resolvedSessionId, mode, nativeTab: nativePanelTab });
+      return;
+    }
+    setPluginSelection(null);
+    if (mode === 'team') {
+      setTeamAreaActiveTab(key as TabType);
+      if (key === 'team') setTeamAreaSelectedMemberId('');
+    } else {
+      setSingleAgentPanelActiveTab(key as SingleAgentToolTab);
+    }
+  };
 
   if (panelExpanded && mode !== 'auto_harness') {
     const isTeam = mode === 'team';
@@ -512,19 +595,14 @@ export function ToolPanel({
     return (
       <div
         data-testid={testId}
-        className="bg-panel h-full overflow-hidden flex flex-1 flex-col min-w-[320px]"
+        className="tool-panel-expanded h-full overflow-hidden flex flex-1 flex-col min-w-[320px]"
+        style={isTeam ? { minWidth: TEAM_PANEL_MIN_WIDTH_PX } : undefined}
       >
-        <div className="h-full bg-panel flex flex-col overflow-hidden">
+        <div className="tool-panel-expanded-content h-full flex flex-col overflow-hidden">
           <ExpandedPanel
-            activeTab={isTeam ? teamAreaActiveTab : singleAgentPanelActiveTab}
-            onTabChange={
-              isTeam
-                ? tab => {
-                    setTeamAreaActiveTab(tab as TabType);
-                    if (tab === 'team') setTeamAreaSelectedMemberId('');
-                  }
-                : tab => setSingleAgentPanelActiveTab(tab as SingleAgentToolTab)
-            }
+            activeTab={selectedPluginPanel?.key ?? nativePanelTab}
+            onTabChange={handlePanelTabChange}
+            additionalPanels={pluginPanels}
             onTabClose={handleTabClose}
             onCollapse={
               isTeam
@@ -542,11 +620,25 @@ export function ToolPanel({
             onArtifactSelect={isTeam ? setTeamAreaSelectedArtifactId : setSingleAgentPanelSelectedArtifactId}
             middleTab={
               isTeam
-                ? { key: 'team', label: t('team.membersTab'), icon: <img src={teamIcon} width={16} height={16} aria-hidden="true" /> }
-                : { key: 'subagents', label: t('subagent.title'), icon: <img src={teamIcon} width={16} height={16} aria-hidden="true" /> }
+                ? {
+                    key: 'team',
+                    label: t('team.membersTab'),
+                    icon: <img src={teamIcon} width={16} height={16} aria-hidden="true" />,
+                  }
+                : {
+                    key: 'subagents',
+                    label: t('subagent.title'),
+                    icon: <img src={teamIcon} width={16} height={16} aria-hidden="true" />,
+                  }
             }
             showMiddleTab={isTeam ? true : subagentCount > 0}
             showBrowserTab={showBrowserTab}
+            additionalTab={appMarketPreview ? {
+              key: 'app', label: appMarketPreview.name, closable: true, closeLabel: t('appMarket.hidePane'),
+              actions: <AppMarketPreviewReload preview={appMarketPreview} />,
+              content: <AppMarketSessionPreview key={`${resolvedSessionId}:${appMarketPreview.instanceId}`}
+                sessionId={resolvedSessionId} preview={appMarketPreview} />,
+            } : undefined}
             resolveActiveTab={(tab, count, review) => {
               if (tab === 'artifacts' && count > 0) return 'artifacts';
               if (tab === 'browser') return showBrowserTab ? 'browser' : 'planning';
@@ -582,9 +674,10 @@ export function ToolPanel({
                 <TaskPlanningPanel
                   variant="expanded"
                   tasks={teamPlanningTasks}
+                  metricTasks={teamTasks}
                   members={teamMembers}
-                  totalTasks={teamTotalTasks + applicationPlanningTasks.length}
-                  completedTasks={teamCompletedTasks + applicationCompleted}
+                  totalTasks={teamTasks.length}
+                  completedTasks={teamCompletedTasks}
                   statusIconAtEnd
                 />
               ) : (
@@ -611,8 +704,9 @@ export function ToolPanel({
   const planningProps = isTeam
     ? {
         tasks: teamPlanningTasks,
-        totalTasks: teamTotalTasks + applicationPlanningTasks.length,
-        completedTasks: teamCompletedTasks + applicationCompleted,
+        metricTasks: teamTasks,
+        totalTasks: teamTasks.length,
+        completedTasks: teamCompletedTasks,
         expanded: teamPlanningExpanded,
       }
     : {
@@ -622,6 +716,7 @@ export function ToolPanel({
         expanded: planningExpanded,
       };
   const expandTo = (tab: TabType | SingleAgentToolTab, teamMemberId?: string) => {
+    setPluginSelection(null);
     if (isTeam) {
       setTeamAreaActiveTab(tab as TabType);
       if (tab === 'team') {
@@ -777,7 +872,12 @@ export function ToolPanel({
             emptyIllustration={emptyMembersIcon}
             renderStatusIcon={() => null}
             renderTaskIcon={task => (
-              <TeamMemberAvatar member={task.assignee ?? ''} alt={task.title ?? ''} className="h-4 w-4 rounded-full shrink-0" imageClassName="rounded-full" />
+              <TeamMemberAvatar
+                member={task.assignee ?? ''}
+                alt={task.title ?? ''}
+                className="h-4 w-4 rounded-full shrink-0"
+                imageClassName="rounded-full"
+              />
             )}
             onTaskClick={taskId => {
               setSingleAgentPanelSelectedSubagentId(taskId);
@@ -897,7 +997,9 @@ export function ToolPanel({
             hideAssignee
             emptyText={t('references.empty')}
             emptyIllustration={emptyReferencesIcon}
-            renderStatusIcon={() => <img src={skillIcon} width={16} height={16} aria-hidden="true" className="shrink-0" />}
+            renderStatusIcon={() => (
+              <img src={skillIcon} width={16} height={16} aria-hidden="true" className="shrink-0" />
+            )}
           />
         </CollapsibleSection>
       ),
@@ -909,8 +1011,15 @@ export function ToolPanel({
   }[];
 
   return (
-    <div ref={floatingPanelRef} data-testid="tool-panel-collapsed" className="bg-panel py-0 pl-6 pr-4 tool-panel-floating">
-      <div className="bg-panel flex flex-col">
+    <div
+      ref={floatingPanelRef}
+      data-testid="tool-panel-collapsed"
+      className="py-0 tool-panel-floating pl-6 pr-4"
+    >
+      <div
+        className="tool-panel-collapsed-content flex min-w-0 flex-col"
+        data-testid="tool-panel-collapsed-content"
+      >
         {collapsedSections.map(section => (
           <div key={section.key} data-testid={section.testId}>
             {section.render()}
