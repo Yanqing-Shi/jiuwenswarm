@@ -49,13 +49,19 @@ async def initialize_main_conversation(session_id: str, *, mode: str | None = No
 
     Called where a Session comes into existence. The record is created only in
     a native mode and only when the Session has no earlier conversation data;
-    an older Session returns None and keeps its previous behaviour. Creation is
-    idempotent, so callers need no lock.
+    an older Session returns None and keeps its previous behaviour. A text-only
+    application role rebuilds its model input from history and has no window to
+    store; only its native Team form gets a record. Creation is idempotent, so
+    callers need no lock.
     """
+    from jiuwenswarm.runtime.app_role import APP_ROLE_PROFILE, is_app_role_team
     from jiuwenswarm.server.runtime.session.session_history import history_exists
     from jiuwenswarm.server.runtime.session.session_metadata import get_session_metadata, patch_session_metadata
 
     if not supports_shared_mode(mode):
+        return None
+    role = get_session_metadata(session_id, cache_bust=True, enable_writeback=False)
+    if role.get("execution_profile") == APP_ROLE_PROFILE and not is_app_role_team(role):
         return None
     binding = main_binding(session_id)
     if history_exists(session_id) or await CheckpointerFactory.get_checkpointer().session_exists(session_id):
