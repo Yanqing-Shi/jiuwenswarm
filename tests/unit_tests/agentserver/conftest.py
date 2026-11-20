@@ -4,10 +4,30 @@
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
 from jiuwenswarm.server.runtime.skill.skill_manager import SkillManager
+
+
+@pytest.fixture(autouse=True)
+def _stub_voice_history_sync_for_mocked_adapters(request, monkeypatch):
+    """Image-fallback notice cases drive an adapter with a MagicMock instance.
+
+    ``getattr(agent, "react_agent", None)`` is never ``None`` on a MagicMock,
+    so ``sync_conversation_context`` would run with a mocked history cursor and
+    raise ``HISTORY_RESTORE_CHANGED`` before the notice under test is built.
+    Those cases only cover the notice text, so the sync is stubbed for that
+    module; it is a no-op where the module is absent.
+    """
+    path = getattr(getattr(request.node, "path", None), "name", None)
+    if path != "test_image_fallback_notice_nonstreaming.py":
+        return
+    monkeypatch.setattr(
+        "jiuwenswarm.extensions.video_duplex.backend.conversation_context.sync_conversation_context",
+        AsyncMock(return_value=None),
+    )
 
 
 @pytest.fixture
@@ -26,6 +46,24 @@ async def worker_callback_framework(monkeypatch):
     if owner is not None:
         await owner.aclose()
     await kernel.close()
+
+
+@pytest.fixture
+def clean_extension_registry():
+    """Run real worker-bootstrap registry creation without leaking the crypto bridge.
+
+    ``create_instance`` installs ``_RegistryCryptoBridge`` into the global crypto
+    provider; restoring only the ``_instance`` class attribute afterwards (as
+    ``monkeypatch.setattr`` does) leaves the bridge orphaned — provider set,
+    instance gone — and later ``crypto.encrypt`` callers fail with
+    "ExtensionRegistry 尚未初始化". ``reset_instance`` clears both sides, so the
+    process ends exactly as clean as it started.
+    """
+    from agent_gateway.extensions.registry import ExtensionRegistry
+
+    ExtensionRegistry.reset_instance()
+    yield
+    ExtensionRegistry.reset_instance()
 
 
 @pytest.fixture

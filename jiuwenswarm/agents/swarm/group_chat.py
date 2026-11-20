@@ -24,7 +24,6 @@ from openjiuwen.agent_teams.schema.team import (
     TeamMemberSpec,
     TeamRole,
 )
-from openjiuwen.agent_teams.external import external_cli_agent_spec_from_template
 from openjiuwen.core.foundation.tool import Tool, ToolCard, ToolOutput
 from openjiuwen.core.runner import Runner
 from openjiuwen.harness.resources import load_agent_template_package
@@ -88,6 +87,7 @@ def assemble_group_members(spec, members: list[dict]) -> None:
     from jiuwenswarm.agents.swarm.assembly import (
         _apply_agent_group,
         _merge_team_prompt,
+        template_external_cli_config,
     )
     from openjiuwen.agent_teams.experts import compose_template_member, load_agent_group_package_bundle
     from jiuwenswarm.server.runtime.extension_package_manager import (
@@ -116,6 +116,17 @@ def assemble_group_members(spec, members: list[dict]) -> None:
             raise ValueError("group member_name must be valid and unique")
         names.add(name)
         kind, definition = item.get("kind"), item.get("id")
+        if kind == "colleague":
+            # Identity comes from the saved roster. Availability is checked when the
+            # colleague joins and before each execution, so a disabled or deleted
+            # colleague never prevents the rest of the group from starting.
+            member = TeamMemberSpec(
+                member_name=name, display_name=item.get("display_name") or name,
+                desc=item.get("description") or "AI colleague", prompt="",
+                role_type=TeamRole.HOST_MANAGED,
+            )
+            prepared.append((name, None, member))
+            continue
         if kind == "agent_template":
             template = load_agent_template_package(
                 resolve_agent_template_dir(definition) / "manifest.json"
@@ -182,7 +193,7 @@ def assemble_group_members(spec, members: list[dict]) -> None:
             desc=template.agent_card.description or "",
             prompt=prompt,
         )
-        external = external_cli_agent_spec_from_template(template)
+        external = template_external_cli_config(spec, template)
         member = (
             ExternalCliMemberSpec(**member_params, external_cli=external)
             if external is not None
@@ -196,7 +207,8 @@ def assemble_group_members(spec, members: list[dict]) -> None:
             install_execution_policy(agent)
         prepared.append((name, agent, member))
     for name, agent, member in prepared:
-        spec.agents[name] = agent
+        if agent is not None:
+            spec.agents[name] = agent
         spec.predefined_members = [*spec.predefined_members, member]
     spec.metadata = {**spec.metadata, "group_members": members}
     spec.team_mode = "hybrid"

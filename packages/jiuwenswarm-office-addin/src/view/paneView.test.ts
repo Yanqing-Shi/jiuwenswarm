@@ -2,10 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SessionId } from '../clientAttachment';
-import { applyEvent, emptyConversation, type Conversation } from '../conversationModel';
+import { addUserMessage, applyEvent, emptyConversation, startTurn, type Conversation } from '../conversationModel';
 import { documentCopy } from '../copy';
 import type { GatewayEvent, JsonObject } from '../gatewayClient';
 import type { PaneState } from '../paneController';
+import { HostLine } from '../hostLine';
 import { POWERPOINT } from '../powerPointApp';
 import { ENTER_GUARD_MS } from './interaction';
 import { mountPane } from './paneView';
@@ -47,10 +48,10 @@ afterEach(() => {
 });
 
 /** The pane on a controller whose state the test sets and whose actions it records. */
-function mounted(initial: Partial<PaneState> = {}) {
+function mounted(initial: Partial<PaneState> = {}, lines: { waiting?: HostLine; selection?: HostLine } = {}) {
   let state: PaneState = {
-    attachment: ATTACHED, conversation: emptyConversation, conversations: [], documents: new Map([['s9', '市场分析.pptx']]),
-    loadingHistory: false, connection: { kind: 'open' }, models: [], undo: { offers: new Set() }, ...initial,
+    attachment: ATTACHED, conversation: emptyConversation, conversations: [], documents: new Map([['s9', { name: '市场分析.pptx', kind: 'presentation', current: false }]]),
+    loadingHistory: false, connection: { kind: 'open' }, models: [], undo: { offers: new Set() }, queue: [], ...initial,
   };
   const listeners = new Set<(state: PaneState) => void>();
   const controller = {
@@ -60,7 +61,7 @@ function mounted(initial: Partial<PaneState> = {}) {
       return () => listeners.delete(listener);
     },
     send: vi.fn(async (_text: string) => true),
-    stop: vi.fn(async () => undefined),
+    stop: vi.fn(async () => true),
     answer: vi.fn(async (): Promise<void> => undefined),
     switchTo: vi.fn(async () => undefined),
     newConversation: vi.fn(async () => undefined),
@@ -69,17 +70,21 @@ function mounted(initial: Partial<PaneState> = {}) {
     dismissAlert: vi.fn(),
     undo: vi.fn(async (_card: string, _overwrite?: boolean) => undefined),
     cancelUndo: vi.fn(),
+    retry: vi.fn(async () => undefined),
+    sendNow: vi.fn(async (_id: string) => undefined),
+    unqueue: vi.fn((id: string) => state.queue.find(item => item.id === id)),
   };
   const root = document.createElement('div');
   document.body.replaceChildren(root);
   mountPane(root, controller, documentCopy.presentation,
-    { now: () => clockNow, every: (_ms, tick) => ticks.push(tick) });
+    { clock: { now: () => clockNow, every: (_ms, tick) => ticks.push(tick) }, ...lines });
   const set = (change: Partial<PaneState>): void => {
     state = { ...state, ...change };
     listeners.forEach(listener => listener(state));
   };
   unmount = () => set({ conversation: emptyConversation });
-  const buttons = (): HTMLButtonElement[] => [...root.querySelectorAll('button')];
+  const buttons = (): HTMLButtonElement[] => (
+    [...root.querySelectorAll('button')].filter(item => !item.closest('[hidden]')));
   const button = (name: string): HTMLButtonElement => {
     const found = buttons().find(item => (item.getAttribute('aria-label') ?? item.textContent) === name);
     if (!found) throw new Error(`no button ${name}; there are ${buttons().map(item => item.textContent).join(' | ')}`);
@@ -95,6 +100,12 @@ function mounted(initial: Partial<PaneState> = {}) {
   };
   return { root, controller, set, button, buttons, input, text, announced, second };
 }
+
+const png = (name: string): File => new File(['ABC'], name, { type: 'image/png' });
+
+/** A paste or drop event with the clipboard or dragged data jsdom does not build. */
+const withData = (type: string, field: string, data: object): Event => (
+  Object.assign(new Event(type, { bubbles: true, cancelable: true }), { [field]: data }));
 
 const key = (name: string, target: EventTarget = document.body): void => {
   target.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true }));
@@ -223,7 +234,7 @@ describe('the composer', () => {
     controller.send.mockResolvedValueOnce(false);
     input().value = '检查标题';
     key('Enter', input());
-    expect(controller.send).toHaveBeenCalledWith('检查标题');
+    expect(controller.send).toHaveBeenCalledWith('检查标题', []);
     expect(input().value).toBe('');
     await vi.waitFor(() => expect(input().value).toBe('检查标题'));
   });
@@ -246,7 +257,119 @@ describe('the composer', () => {
     input().value = '顺便检查字号';
     input().dispatchEvent(new Event('input'));
     button('发送').click();
-    expect(controller.send).toHaveBeenCalledWith('顺便检查字号');
+    expect(controller.send).toHaveBeenCalledWith('顺便检查字号', []);
+  });
+
+  it('sends the images picked, pasted or dropped with the next message, less the ones removed', async () => {
+    const { root, controller, input, button } = mounted();
+    const picker = root.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(picker, 'files', { value: [png('a.png')] });
+    picker.dispatchEvent(new Event('change'));
+    const pasted = (text: string): Event => withData('paste', 'clipboardData',
+      { getData: () => text, items: [{ kind: 'file', getAsFile: () => png('b.png') }], files: [] });
+    const textWins = pasted('标题文字');
+    input().dispatchEvent(textWins);
+    expect(textWins.defaultPrevented).toBe(false);
+    input().dispatchEvent(pasted(''));
+    root.querySelector('.composer-card')!.dispatchEvent(withData('drop', 'dataTransfer', { files: [png('c.png')] }));
+    await vi.waitFor(() => expect(root.querySelectorAll('.composer-image img')).toHaveLength(3));
+
+    button('移除图片 b.png').click();
+    button('发送').click();
+    expect(controller.send).toHaveBeenCalledWith('', ['a.png', 'c.png'].map(
+      filename => ({ filename, mimeType: 'image/png', base64Data: 'QUJD' })));
+    expect(root.querySelectorAll('.composer-image')).toHaveLength(0);
+  });
+
+  it('takes documents as chips with their name and size, and says which files it did not take, and why', async () => {
+    const { root, button, text, controller } = mounted();
+    const big = png('big.png');
+    Object.defineProperty(big, 'size', { value: 11 * 1024 * 1024 });
+    vi.spyOn(FileReader.prototype, 'readAsDataURL').mockImplementationOnce(function (this: FileReader) {
+      this.dispatchEvent(new ProgressEvent('error'));
+    });
+    root.querySelector('.composer-card')!.dispatchEvent(withData('drop', 'dataTransfer',
+      { files: [new File(['tool'], 'tool.exe'), big, png('gone.png'), png('ok.png'),
+        new File(['%PDF'], 'brief.pdf', { type: 'application/pdf' }), new File(['# 纪要'], 'notes.md')] }));
+    await vi.waitFor(() => expect(text('.composer-note')).toBe(
+      '不支持这种文件：tool.exe（支持图片、PDF、Word、Excel、PowerPoint、CSV、TXT、JSON、Markdown）；'
+      + '图片太大：big.png（单张最大 10 MB）；图片读取失败：gone.png'));
+    expect(root.querySelector('.composer-image img')?.getAttribute('alt')).toBe('ok.png');
+    expect([...root.querySelectorAll('.composer-file')].map(item => item.textContent)).toEqual(
+      ['brief.pdf4 B', 'notes.md8 B']);
+    button('发送').click();
+    expect(controller.send).toHaveBeenCalledWith('', [expect.objectContaining({ filename: 'ok.png' }),
+      { filename: 'brief.pdf', mimeType: 'application/pdf', base64Data: 'JVBERg==' },
+      { filename: 'notes.md', mimeType: 'text/markdown', base64Data: expect.any(String) }]);
+  });
+
+  it('shows an image as soon as it is added, and one that never reads holds the message only until removed or given up', async () => {
+    const { root, button, text, input } = mounted();
+    vi.spyOn(FileReader.prototype, 'readAsDataURL').mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => undefined);
+    root.querySelector('.composer-card')!.dispatchEvent(withData('drop', 'dataTransfer',
+      { files: [png('a.png'), png('b.png')] }));
+    input().value = '看图';
+    input().dispatchEvent(new Event('input'));
+    expect(root.querySelectorAll('.composer-image')).toHaveLength(2);
+    expect(button('发送').disabled).toBe(true);
+
+    button('移除图片 a.png').click();
+    expect(root.querySelectorAll('.composer-image')).toHaveLength(1);
+    vi.advanceTimersByTime(10_000);
+    await vi.waitFor(() => expect(text('.composer-note')).toBe('图片读取失败：b.png'));
+    expect(root.querySelectorAll('.composer-image')).toHaveLength(0);
+    expect(button('发送').disabled).toBe(false);
+  });
+
+  it('lists the messages waiting for the turn: one goes back to the box for editing, goes now, or is dropped', async () => {
+    const logo = { filename: 'logo.png', mimeType: 'image/png', base64Data: 'QUJD' };
+    const { root, set, button, controller, input } = mounted({
+      conversation: conversationOf(['chat.processing_status', { is_processing: true }]),
+      queue: [{ id: 'q1', text: '只看前 3 页', attachments: [] }, { id: 'q2', text: '用这张图', attachments: [logo] }],
+    });
+    const rows = (): string[] => [...root.querySelectorAll('.queue-text')].map(item => item.textContent ?? '');
+    expect(rows()).toEqual(['只看前 3 页', '用这张图']);
+    expect(root.querySelectorAll('.queue-item')[1].querySelector('button[aria-label="立即发送"]')).toBeNull();
+
+    button('立即发送').click();
+    expect(controller.sendNow).toHaveBeenCalledWith('q1');
+    button('移除 只看前 3 页').click();
+    expect(controller.unqueue).toHaveBeenCalledWith('q1');
+
+    (root.querySelectorAll('.queue-text')[1] as HTMLElement).click();
+    expect(controller.unqueue).toHaveBeenCalledWith('q2');
+    expect(input().value).toBe('用这张图');
+    expect(root.querySelectorAll('.composer-image img')).toHaveLength(1);
+    set({ queue: [] });
+    expect(root.querySelector('.queue')!.hasAttribute('hidden')).toBe(true);
+  });
+
+  it('puts back only the queued attachments the box still has room for, and says why the others stay out', async () => {
+    const logo = { filename: 'logo.png', mimeType: 'image/png', base64Data: 'QUJD' };
+    const { root, text } = mounted({
+      conversation: conversationOf(['chat.processing_status', { is_processing: true }]),
+      queue: [{ id: 'q1', text: '用这张图', attachments: [logo] }],
+    });
+    root.querySelector('.composer-card')!.dispatchEvent(withData('drop', 'dataTransfer',
+      { files: Array.from({ length: 8 }, (_, index) => png(`${index}.png`)) }));
+    await vi.waitFor(() => expect(root.querySelectorAll('.composer-image img')).toHaveLength(8));
+
+    (root.querySelector('.queue-text') as HTMLElement).click();
+    expect(root.querySelectorAll('.composer-image')).toHaveLength(8);
+    expect(root.querySelector('.composer-image img[alt="logo.png"]')).toBeNull();
+    expect(text('.composer-note')).toBe('每条消息最多 8 张图片');
+  });
+
+  it('shows the images a message carried, and a replayed message\'s by name', () => {
+    const sent = addUserMessage(
+      emptyConversation, '照这个配色改', [{ filename: 'logo.png', src: 'data:image/png;base64,QUJD' }]);
+    const { root } = mounted({ conversation: addUserMessage(sent, '', [{ filename: 'old.png' }]) });
+    const [live, replayed] = root.querySelectorAll('.entry-user');
+    expect(live.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,QUJD');
+    expect(live.querySelector('.bubble')?.textContent).toBe('照这个配色改');
+    expect(replayed.querySelector('img')).toBeNull();
+    expect(replayed.textContent).toBe('old.png');
   });
 
   it('offers no Stop in a window another one displaced, as the turn goes on there', () => {
@@ -292,6 +415,7 @@ describe('the tray', () => {
     expect(announced()).toBe('连接已中断，5 秒后重连（第 2 次）');
     set({ connection: { kind: 'open' } });
     expect(root.querySelector<HTMLElement>('.tray')!.hidden).toBe(true);
+    expect(announced()).toBe('');
   });
 
   it('offers to continue here when another window holds the document, with the composer off', () => {
@@ -320,6 +444,19 @@ describe('the tray', () => {
     expect(text('.tray')).toBe('发送失败：网络中断');
     button('关闭提示').click();
     expect(controller.dismissAlert).toHaveBeenCalled();
+  });
+
+  it('shows what a call waits for the user to do, and above the message box what they selected', () => {
+    const [waiting, selection] = [new HostLine(), new HostLine()];
+    const { root, text } = mounted({}, { waiting, selection });
+    waiting.set('你正在编辑单元格，按 Enter 或 Esc 结束编辑后，WorkSwarm 才能继续');
+    selection.set('已选中 A1:B3');
+    expect(text('.tray')).toBe('你正在编辑单元格，按 Enter 或 Esc 结束编辑后，WorkSwarm 才能继续');
+    expect(root.querySelector('.selection-line + .composer')?.previousElementSibling?.textContent).toBe('已选中 A1:B3');
+    waiting.set(undefined);
+    selection.set(undefined);
+    expect(text('.tray')).toBe('');
+    expect(root.querySelector<HTMLElement>('.selection-line')!.hidden).toBe(true);
   });
 });
 
@@ -428,6 +565,26 @@ describe('the end of a turn', () => {
     expect(controller.undo).toHaveBeenCalledWith(card);
   });
 
+  it('offers a failure\'s way out under it: retry while it is the latest, a new conversation, or its details', async () => {
+    const writeText = vi.fn(async (_text: string) => undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const busy = conversationOf(['chat.error', { error: 'error code: 429', code: 'rate_limited' }]);
+    const { button, buttons, controller, set } = mounted({ conversation: busy, retry: busy.entries[0].id });
+    button('重试').click();
+    expect(controller.retry).toHaveBeenCalled();
+    set({ retry: undefined });
+    expect(buttons().map(item => item.textContent)).not.toContain('重试');
+    expect(buttons().map(item => item.textContent)).toContain('复制详情');
+
+    set({ conversation: conversationOf(['chat.error', { error: 'gone', code: 'SESSION_ARCHIVED' }]) });
+    button('新对话').click();
+    expect(controller.newConversation).toHaveBeenCalled();
+
+    set({ conversation: conversationOf(['chat.error', { error: 'quota', code: 'quota_exhausted' }]) });
+    button('复制详情').click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('quota_exhausted: quota'));
+  });
+
   it('copies the whole reply of the turn, and shows for a moment that it did', async () => {
     const writeText = vi.fn(async (_text: string) => undefined);
     Object.assign(navigator, { clipboard: { writeText } });
@@ -459,6 +616,23 @@ describe('the end of a turn', () => {
     expect(step(['chat.final', { content: '共 4 页。' }], ['chat.processing_status', { is_processing: false }])).toBe(false);
   });
 
+  it('says so when nothing has come for 15 s, and while the conversation is being compacted', () => {
+    const { set, second, text } = mounted();
+    const events: [string, JsonObject][] = [['chat.processing_status', { is_processing: true }]];
+    set({ conversation: conversationOf(...events) });
+    for (let at = 0; at < 14; at += 1) second();
+    expect(text('.thinking')).toBe('');
+    second();
+    expect(text('.thinking')).toBe('仍在处理，网络可能较慢');
+
+    events.push(['context.compression_state', { status: 'started', phase: 'active_compress' }]);
+    set({ conversation: conversationOf(...events) });
+    expect(text('.thinking')).toBe('正在压缩对话');
+    events.push(['context.compression_state', { status: 'completed', phase: 'active_compress' }]);
+    set({ conversation: conversationOf(...events) });
+    expect(text('.thinking')).toBe('');
+  });
+
   it('asks in one short line before it overwrites slides changed since', () => {
     const conversation = wrote();
     const card = conversation.entries.at(-1)!.id;
@@ -472,6 +646,19 @@ describe('the end of a turn', () => {
 });
 
 describe('the header', () => {
+  it('lists the open files of this kind, this one first and marked', () => {
+    const { root, button } = mounted({ documents: new Map([
+      ['s9', { name: '市场分析.pptx', kind: 'presentation', current: false }],
+      ['s8', { name: '预算.xlsx', kind: 'workbook', current: false }],
+      [S1, { name: '季度汇报.pptx', kind: 'presentation', current: true }],
+    ]) });
+    expect(root.querySelector('.files-count')?.textContent).toBe('2');
+    button('打开的演示文稿').click();
+    const items = [...root.querySelectorAll('#files-menu .menu-item')];
+    expect(items.map(item => item.querySelector('.menu-item-title')!.textContent)).toEqual(['季度汇报.pptx', '市场分析.pptx']);
+    expect(items.map(item => item.querySelector('.menu-item-meta')?.textContent)).toEqual(['本文件', undefined]);
+  });
+
   it('lists the document\'s conversations, marks the current one, and switches', () => {
     const now = Math.floor(Date.now() / 1000);
     const { root, button, controller } = mounted({ conversations: [
@@ -519,6 +706,32 @@ describe('the header', () => {
     const { button, controller } = mounted();
     button('新对话').click();
     expect(controller.newConversation).toHaveBeenCalled();
+  });
+
+  it('asks before it leaves a conversation whose turn runs or waits on the user, as leaving stops it', () => {
+    const { root, set, button, controller } = mounted({ conversation: startTurn(emptyConversation), conversations: [
+      { sessionId: S1, title: '改标题', lastMessageAt: 0 },
+      { sessionId: 's0' as SessionId, title: '旧的', lastMessageAt: 0 },
+    ] });
+    const ask = root.querySelector<HTMLElement>('[role="alertdialog"]')!;
+    button('本文档的对话').click();
+    root.querySelectorAll<HTMLButtonElement>('#history-menu .menu-item')[1].click();
+    expect(ask.textContent).toBe(
+      '停止当前对话？切换对话会停止正在进行的对话。取消停止并切换');
+    button('停止并切换').click();
+    expect(controller.switchTo).toHaveBeenCalledWith('s0');
+
+    set({ conversation: conversationOf(['chat.ask_user_question', PERMISSION]) });
+    button('新对话').click();
+    expect(ask.textContent).toBe(
+      '停止当前对话？新建对话会停止正在进行的对话。取消停止并新建');
+    expect(document.activeElement).toBe(button('取消'));
+    key('Escape', document.activeElement!);
+    expect([ask.hidden, document.activeElement]).toEqual([true, button('新对话')]);
+    expect(controller.answer).not.toHaveBeenCalled();
+    button('新对话').click();
+    button('停止并新建').click();
+    expect(controller.newConversation).toHaveBeenCalledTimes(1);
   });
 });
 

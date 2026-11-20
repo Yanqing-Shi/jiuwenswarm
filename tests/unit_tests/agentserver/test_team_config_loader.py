@@ -199,6 +199,73 @@ def test_effective_team_models_select_from_normalized_entries(monkeypatch):
     assert entries[0]["model_client_config"]["custom_headers"] == {"X-Trace-Id": "trace-one"}
 
 
+def test_team_manager_uses_resolved_config_provider_when_yaml_provider_is_blank(monkeypatch):
+    """Cluster assembly must use the same resolved model snapshot as single-agent chat.
+
+    AgentServer config.yaml often still contains an unresolved ``${MODEL_PROVIDER}``.
+    Single-agent chat overlays the enterprise template first; team spec loading has
+    to accept that overlay instead of validating the blank placeholder.
+    """
+    from jiuwenswarm.agents.harness.team import team_manager as team_manager_module
+    from jiuwenswarm.agents.harness.team.team_manager import TeamManager
+
+    yaml_config = {
+        "models": {
+            "defaults": [
+                {
+                    "model_client_config": {
+                        "api_base": "",
+                        "api_key": "",
+                        "model_name": "",
+                        "client_provider": "",
+                    },
+                    "model_config_obj": {},
+                }
+            ]
+        },
+        **_wrap_modes_team(
+            {
+                "demo_team": {
+                    "team_name": "demo_team",
+                    "agents": {"leader": {}, "teammate": {}},
+                }
+            }
+        ),
+    }
+    resolved_config = {
+        "models": {
+            "defaults": [
+                {
+                    "model_id": "default-model",
+                    "model_client_config": {
+                        "api_base": "http://113.46.219.251:8080/v1",
+                        "api_key": "sk-test",
+                        "model_name": "GLM-5.2",
+                        "client_provider": "OpenAI",
+                    },
+                    "model_config_obj": {},
+                    "is_default": True,
+                }
+            ]
+        },
+        **_wrap_modes_team(
+            {
+                "demo_team": {
+                    "team_name": "demo_team",
+                    "agents": {"leader": {}, "teammate": {}},
+                }
+            }
+        ),
+    }
+    monkeypatch.setattr(team_manager_module, "get_config", lambda: yaml_config)
+
+    spec = TeamManager._load_team_spec("session-one", config_base=resolved_config)
+
+    assert spec.model_pool[0].api_provider == "OpenAI"
+    assert spec.model_pool[0].model_name == "GLM-5.2"
+    assert spec.agents["leader"].model.model_client_config.client_provider == "OpenAI"
+
+
 def test_team_manager_builds_pool_for_single_configured_model(monkeypatch):
     """A single configured model remains available to external fallback."""
     from jiuwenswarm.agents.harness.team import team_manager as team_manager_module
@@ -1764,3 +1831,56 @@ def test_leader_from_top_level_reference_is_unbounded():
     assert spec["agents"]["leader"]["max_iterations"] is None
     assert spec["agents"]["leader"]["completion_timeout"] == 6000.0
     assert config["agents"]["agent_leader"]["max_iterations"] == 200
+
+
+@pytest.mark.parametrize("mode,enabled", [("scheduled", True), ("autonomous", False)])
+def test_leader_goal_only_applies_to_scheduled_templates(mode: str, enabled: bool) -> None:
+    from openjiuwen.agent_teams.schema.blueprint import TeamAgentSpec
+
+    config = _config_with_team({"leader": {}, "teammate": {}})
+    team = config["modes"]["team"]["demo_team"]
+    team["dispatch_mode"] = mode
+    team["leader"] = {"display_name": "Goal Leader", "goal": {}}
+    original = deepcopy(config)
+    loaded = load_team_spec_dict(config_base=config)
+    spec = TeamAgentSpec.model_validate(loaded)
+    assert (spec.leader.goal is not None) == enabled
+    if enabled:
+        assert spec.leader.goal.max_attempts == 10
+        assert spec.leader.goal.strategy == "hybrid"
+        assert spec.leader.goal.token_budget is None
+    assert spec.member_goal is None
+    assert config == original
+
+
+def test_goal_template_snapshot_takes_precedence_over_global_settings() -> None:
+    config = _config_with_team({"leader": {}, "teammate": {}})
+    snapshot = deepcopy(config["modes"]["team"]["demo_team"])
+    snapshot.update({"dispatch_mode": "scheduled", "leader": {"goal": {"max_attempts": 3}}})
+    config["modes"]["team"]["demo_team"]["leader"] = {"goal": None}
+    loaded = load_team_spec_dict(config_base=config, template_snapshot=snapshot)
+    assert loaded["leader"]["goal"]["max_attempts"] == 3
+    assert snapshot["leader"]["goal"] == {"max_attempts": 3}
+
+
+def test_member_goal_remains_yaml_only_and_leader_cli_is_rejected() -> None:
+    config = _config_with_team({"leader": {}, "teammate": {}})
+    team = config["modes"]["team"]["demo_team"]
+    team["member_goal"] = {"max_attempts": 2}
+    loaded = load_team_spec_dict(config_base=config)
+    assert loaded["member_goal"] == {"strategy": "hybrid", "max_attempts": 2}
+    assert loaded["leader"]["goal"] is None
+    team.update({"dispatch_mode": "scheduled", "leader": {"goal": {}, "cli_agent": "codex"}})
+    with pytest.raises(ValueError, match="CLI leader"):
+        load_team_spec_dict(config_base=config)
+
+
+def test_goal_enablement_rejects_an_old_core_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openjiuwen.agent_teams.schema.blueprint import LeaderSpec
+
+    config = _config_with_team({"leader": {}})
+    team = config["modes"]["team"]["demo_team"]
+    team.update({"dispatch_mode": "scheduled", "leader": {"goal": {}}})
+    monkeypatch.setattr(LeaderSpec, "__pydantic_fields__", {})
+    with pytest.raises(ValueError, match="updated openjiuwen"):
+        load_team_spec_dict(config_base=config)

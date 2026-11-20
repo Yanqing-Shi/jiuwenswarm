@@ -398,7 +398,8 @@ async def test_adopted_chat_reads_authoritative_metadata_once(mode_session, sess
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stored_mode, params, work_kind", [
-    ("agent.code.normal", {"mode": "agent.code.plan", "query": "plan this"}, None),
+    # Upstream classifies a plan chat as single-Agent chat work; the early claim must leave that as it is.
+    ("agent.code.normal", {"mode": "agent.code.plan", "query": "plan this"}, SessionWorkKind.CHAT_UNARY),
     ("agent.code.normal", {"mode": "auto_harness", "query": "run"}, None),
     ("agent.code.normal", {"mode": "agent.code.normal", "query": "hello"}, SessionWorkKind.CHAT_UNARY),
     ("team.code.normal", {"mode": "team.code.normal", "query": ""}, SessionWorkKind.TEAM_REQUEST),

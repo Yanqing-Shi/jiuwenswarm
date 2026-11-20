@@ -32,7 +32,6 @@ export type ConnectionState = { kind: 'open' } | { kind: 'down'; attempt: number
 export class GatewayClient {
   private socket: WebSocket | null = null;
   private connectPromise: Promise<void> | null = null;
-  private sequence = 0;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly listeners = new Set<(event: GatewayEvent) => void>();
   private readonly reconnectListeners = new Set<() => void>();
@@ -53,7 +52,7 @@ export class GatewayClient {
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const query = new URLSearchParams({ app_id: this.appId, user_id: getOrCreateOfficeUserId(this.appId) });
+    const query = new URLSearchParams({ app_id: this.appId, user_id: getOrCreateOfficeUserId() });
     const socket = new WebSocket(`${protocol}//${window.location.host}/ws?${query}`);
     this.socket = socket;
     const opening = new Promise<void>((resolve, reject) => {
@@ -130,7 +129,7 @@ export class GatewayClient {
     await this.connect();
     const socket = this.socket;
     if (socket?.readyState !== WebSocket.OPEN) throw new GatewayRequestError('Gateway connection is not open');
-    const id = `office_${Date.now().toString(36)}_${++this.sequence}`;
+    const id = `office_${crypto.randomUUID()}`;
     const answered = new Promise<JsonObject>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -178,12 +177,18 @@ export class GatewayClient {
   }
 }
 
-function getOrCreateOfficeUserId(appId: string): string {
-  const storageKey = `jiuwenswarm-office-user-id:${appId}`;
-  const existing = window.localStorage.getItem(storageKey);
+/** Kept once per page origin, which WPS's presentation, writer and spreadsheet panes share. */
+const USER_ID_KEY = 'jiuwenswarm-office-user-id';
+
+function getOrCreateOfficeUserId(): string {
+  // The desktop install puts one id for every Office host in the pane URL; WPS panes and a development sideload have
+  // none, so their hosts share the one kept here and see each other's documents.
+  const installed = new URLSearchParams(window.location.search).get('u');
+  if (installed) return installed;
+  const existing = window.localStorage.getItem(USER_ID_KEY);
   if (existing) return existing;
   const created = `office-${crypto.randomUUID()}`;
-  window.localStorage.setItem(storageKey, created);
+  window.localStorage.setItem(USER_ID_KEY, created);
   return created;
 }
 

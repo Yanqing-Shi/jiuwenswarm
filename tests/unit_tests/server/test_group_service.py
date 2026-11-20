@@ -106,45 +106,29 @@ async def create(service, token="one", **params):
 
 
 @pytest.mark.asyncio
-async def test_group_lock_releases_after_repeated_cancellation(tmp_path, monkeypatch):
-    monkeypatch.setattr(gs, "get_agent_sessions_dir", lambda: tmp_path / "sessions")
-    original_lock = gs.cross_process_file_lock
-    original_to_thread = asyncio.to_thread
-    guards = []
+async def test_colleague_create_and_add_retries_keep_the_original_request(service, monkeypatch):
+    from jiuwenswarm.server.jiuwenmate.service import PersistentAgentService
 
-    def retain_guard(path):
-        guard = original_lock(path, timeout=0.05)
-        guards.append(guard)
-        return guard
+    colleague = SimpleNamespace(name="Authoritative name", description="Profile", enabled=True,
+                                avatar_url="", category="custom", is_default=False)
+    monkeypatch.setattr(PersistentAgentService, "create_default",
+                        lambda: SimpleNamespace(get_colleague=lambda *_: colleague))
+    first = {"kind": "colleague", "id": "one", "member_name": "assistant"}
+    group = await create(service, members=[dict(first)])
+    assert group["members"][0]["display_name"] == colleague.name
+    assert await create(service, members=[dict(first)]) == group
+    with pytest.raises(gs.GroupError, match="different group"):
+        await create(service, members=[{**first, "id": "different"}])
 
-    async def offload(func, *args):
-        if getattr(func, "__name__", None) == "__exit__":
-            await asyncio.sleep(0)
-        return await original_to_thread(func, *args)
-
-    monkeypatch.setattr(gs, "cross_process_file_lock", retain_guard)
-    monkeypatch.setattr(asyncio, "to_thread", offload)
-    entered = asyncio.Event()
-
-    async def hold_lock():
-        async with gs.group_lock("group-cancelled"):
-            entered.set()
-            try:
-                await asyncio.Future()
-            finally:
-                asyncio.get_running_loop().call_soon(task.cancel)
-
-    task = asyncio.create_task(hold_lock())
-    try:
-        await asyncio.wait_for(entered.wait(), 2)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        async with gs.group_lock("group-cancelled"):
-            pass
-    finally:
-        for guard in guards:
-            guard.__exit__(None, None, None)
+    second = {"kind": "colleague", "id": "two", "member_name": "reviewer", "display_name": "Old"}
+    args = {"user_id": "owner", "channel_id": "web", "request_id": "add"}
+    response = await service.add_member(group["group_id"], {"member": dict(second)}, **args)
+    assert response["member"]["display_name"] == colleague.name
+    assert await service.add_member(group["group_id"], {"member": dict(second)}, **args) == response
+    persisted = gs.read_group(group["group_id"])
+    assert persisted["receipts"]["add"] == second
+    with pytest.raises(gs.GroupError, match="different member"):
+        await service.add_member(group["group_id"], {"member": {**second, "id": "different"}}, **args)
 
 
 @pytest.mark.asyncio

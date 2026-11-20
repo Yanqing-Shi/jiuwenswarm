@@ -35,7 +35,7 @@ describe('GatewayClient', () => {
     FakeWebSocket.instances = [];
     vi.stubGlobal('WebSocket', FakeWebSocket);
     vi.stubGlobal('window', {
-      location: { protocol: 'https:', host: 'localhost:3001' },
+      location: { protocol: 'https:', host: 'localhost:3001', search: '' },
       localStorage: { getItem: () => 'office-test-owner' },
       addEventListener: vi.fn(),
     });
@@ -45,10 +45,27 @@ describe('GatewayClient', () => {
     vi.useRealTimers();
   });
 
+  it('gives every host the same user without an installed one, so the hosts see each other\'s documents', async () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal('window', {
+      location: { protocol: 'http:', host: '127.0.0.1:5373', search: '?doc=a' },
+      localStorage: { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => {
+        stored.set(key, value);
+      } },
+      addEventListener: vi.fn(),
+    });
+    const users = ['office_excel', 'office_powerpoint', 'office_word'].map(app => {
+      void new GatewayClient(app).connect();
+      return new URL(FakeWebSocket.instances.at(-1)!.url).searchParams.get('user_id');
+    });
+    expect(new Set(users).size).toBe(1);
+    expect(users[0]).toMatch(/^office-/);
+  });
+
   async function connected(): Promise<{ client: GatewayClient; socket: FakeWebSocket }> {
     const client = new GatewayClient('office_powerpoint');
     const opening = client.connect();
-    const socket = FakeWebSocket.instances[0];
+    const socket = FakeWebSocket.instances.at(-1)!;
     socket.open();
     await opening;
     return { client, socket };
@@ -72,6 +89,15 @@ describe('GatewayClient', () => {
     client.disconnect();
   });
 
+  it.each([
+    ['', 'office-test-owner'],
+    ['?u=office-installed&_host_Info=PowerPoint', 'office-installed'],
+  ])('connects as the user in the pane URL %j, else the stored one', (search, userId) => {
+    window.location.search = search;
+    void new GatewayClient('office_word').connect();
+    expect(FakeWebSocket.instances[0].url).toBe(`wss://localhost:3001/ws?app_id=office_word&user_id=${userId}`);
+  });
+
   it('answers a request with its payload, and a refusal with the code of the frame', async () => {
     const { client, socket } = await connected();
     const renewed = client.request('client.renew', { attachment_id: 'att_1' });
@@ -91,6 +117,17 @@ describe('GatewayClient', () => {
     expect(error).toBeInstanceOf(GatewayRequestError);
     expect(error).toMatchObject({ code: 'NOT_ATTACHED', message: 'no such attachment: attach again' });
     client.disconnect();
+  });
+
+  it('gives the requests of panes sharing one Office user, sent in the same instant, different ids', async () => {
+    const panes = [await connected(), await connected()];
+    const attaches = panes.map(({ client }) => client.request('client.attach'));
+    await Promise.resolve();
+    const [first, second] = panes.map(({ socket }) => socket.sent[0].id);
+    expect(first).not.toBe(second);
+    panes.forEach(({ socket }) => socket.message({ type: 'res', id: socket.sent[0].id, ok: true, payload: {} }));
+    await Promise.all(attaches);
+    panes.forEach(({ client }) => client.disconnect());
   });
 
   it('fails the requests of a dropped connection, reconnects, and stops for good on disconnect', async () => {

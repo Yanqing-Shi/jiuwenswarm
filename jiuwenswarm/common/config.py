@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import sys
 import threading
 import time
@@ -35,9 +36,16 @@ from jiuwenswarm.common.runtime_model_config import apply_runtime_model_config
 from jiuwenswarm.common.utils import (
     get_config_dir,
     get_config_file,
+    refresh_external_cli_state_sidecar,
 )
 
 logger = logging.getLogger(__name__)
+
+# Prefix of an exec: credential reference (see common/credentials/resolver.py).
+# Declared locally so the hot resolve_env_vars path needs no credentials
+# import to test the prefix; registry/resolver are imported lazily only after
+# the prefix matches.
+EXEC_PREFIX = "exec:"
 
 _CONFIG_MODULE_DIR = Path(__file__).parent
 CONFIG_YAML_PATH = get_config_file()
@@ -50,6 +58,7 @@ TEAM_DISPATCH_MODE_CONFIG_PATH = ("modes", "team", "jiuwen_team", "dispatch_mode
 TEAM_TASK_VERIFICATION_CONFIG_PATH = ("modes", "team", "jiuwen_team", "enable_task_verification")
 TEAM_MEMBER_MESSAGING_CONFIG_PATH = ("modes", "team", "jiuwen_team", "enable_member_messaging")
 TEAM_MEMBER_SUBTASK_DEPTH_CONFIG_PATH = ("modes", "team", "jiuwen_team", "max_subtask_depth")
+TEAM_CODE_TODO_REMINDER_DISABLED_CONFIG_PATH = ("modes", "team", "jiuwen_team", "disable_code_todo_reminder")
 DEFAULT_TEAM_DISPATCH_MODE = "autonomous"
 DEFAULT_TEAM_TASK_VERIFICATION_ENABLED = False
 DEFAULT_TEAM_MEMBER_MESSAGING_ENABLED = False
@@ -81,16 +90,35 @@ if str(_CONFIG_MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(_CONFIG_MODULE_DIR))
 
 
-def resolve_env_vars(value: Any) -> Any:
+def resolve_env_vars(value: Any, *, field_path: str = "") -> Any:
     """递归解析配置中的环境变量替换语法 ${VAR:-default}.
 
     Args:
         value: 配置值，可能是字符串、字典或列表
+        field_path: 当前值在配置树中的点分路径（如
+            ``models.defaults.model_client_config.api_key``）。默认空串时
+            行为与历史版本完全一致；路径命中凭据注册表且值为 ``exec:``
+            引用时查 ``_RESOLVED_SECRETS`` 单例替换（命中即返回，miss
+            则投递后台队列并返回空串——分流分支不执行命令）。
+            传 tuple 形式（每段一个元素）可避免递归中的路径字符串拼接；
+            字符串与 tuple 两种形式等价。
 
     Returns:
         解析后的值
     """
     if isinstance(value, str):
+        # Credential exec: references on registered fields resolve via the
+        # in-memory store (prewarmed at startup / filled by the save path /
+        # the background queue). This branch never runs a subprocess; a miss
+        # degrades to "" + a queued background resolve.
+        if field_path and value.startswith(EXEC_PREFIX):
+            path = ".".join(field_path) if isinstance(field_path, tuple) else field_path
+            from jiuwenswarm.common.credentials.registry import is_credential_field
+
+            if is_credential_field(path):
+                from jiuwenswarm.common.credentials.resolver import resolve_credential_ref
+
+                return resolve_credential_ref(value, field_path=path)
         # 匹配 ${VAR:-default} 格式
         pattern = r'\$\{([^:}]+)(?::-([^}]*))?\}'
 
@@ -140,9 +168,22 @@ def resolve_env_vars(value: Any) -> Any:
                 k: (v if k in mcp_credential_keys else resolve_env_vars(v))
                 for k, v in value.items()
             }
-        return {k: resolve_env_vars(v) for k, v in value.items()}
+        # dict keys extend the field path; list indices are not tracked
+        # (the walk keeps its original list comprehension — a glob `*`
+        # segment matches both bare and indexed forms). The path is carried
+        # as a tuple and joined only at the exec: leaf (see str branch), so
+        # non-credential walks pay no per-key string concatenation.
+        return {
+            k: resolve_env_vars(v, field_path=(*field_path, str(k)) if field_path else (str(k),))
+            for k, v in value.items()
+        }
     elif isinstance(value, list):
-        return [resolve_env_vars(item) for item in value]
+        # list items keep the parent field_path verbatim (no index segment):
+        # the models.defaults list elements produce
+        # ``models.defaults.model_client_config.api_key`` inside, which the
+        # registry glob already matches — and existing callers that never
+        # pass field_path are unaffected (empty default).
+        return [resolve_env_vars(item, field_path=field_path) for item in value]
     else:
         return value
 
@@ -280,6 +321,11 @@ def get_config():
             except (ValueError, TypeError):
                 logger.warning("Ignoring malformed AgentOS %s deployment config", section)
 
+    if "symphony" in config_base:
+        from jiuwenswarm.common.symphony_config import load_symphony_config, migrate_legacy_symphony_config
+        if isinstance(config_base["symphony"], dict):
+            config_base["symphony"] = migrate_legacy_symphony_config(config_base["symphony"])
+        load_symphony_config(config_base)
     return apply_runtime_model_config(config_base)
 
 
@@ -343,24 +389,9 @@ def get_skill_evolution_enabled(config: dict[str, Any] | None) -> bool:
 def get_symphony_evolution_enabled(config: dict[str, Any] | None) -> bool:
     """Read the persisted Discover SkillPack setting without deployment overrides."""
 
-    from jiuwenswarm.common.symphony_config import (
-        resolve_symphony_evolution_enabled,
-    )
-
-    if not isinstance(config, dict):
-        return False
-    symphony = config.get("symphony")
-    if not isinstance(symphony, dict):
-        symphony = {}
-    evolution = symphony.get("evolution")
-    if not isinstance(evolution, dict):
-        evolution = {}
-    # enabled 位于 evolution.flow 下；旧配置（evolution.enabled）向后兼容
-    flow = evolution.get("flow")
-    flow_enabled = flow.get("enabled") if isinstance(flow, dict) else None
-    if flow_enabled is None:
-        flow_enabled = evolution.get("enabled")
-    return resolve_symphony_evolution_enabled(flow_enabled)
+    from jiuwenswarm.common.symphony_config import load_symphony_config
+    resolved = load_symphony_config(config or {})
+    return resolved.orchestration.experience.enabled
 
 
 def coerce_config_bool(value: Any, default: bool) -> bool:
@@ -470,8 +501,7 @@ def is_tool_retrieval_enabled(config: dict[str, Any] | None = None) -> bool:
 
     True only when both top-level switches are true: ``progressive_tool_enabled``
     (AbilityManager deferred assignment) and ``progressive_tool_optimize`` (the
-    retrieval layer itself). ``true`` means our skill_index-framework
-    ``tool_search`` is mounted and deferred tools are hidden until discovered;
+    retrieval layer itself). ``true`` mounts ``tool_search`` and hides deferred tools until discovered.
     ``false`` disables it and every tool stays direct.
     """
 
@@ -598,6 +628,13 @@ def dump_yaml_round_trip(config_path: Path, data: Any) -> None:
         except FileNotFoundError:
             pass
         raise
+    # config.yaml 的唯一写出口：落盘后同步三方 agent 状态旁路，覆盖所有更新
+    # 路径（agents/histories/prune/teams/builtin_models/reset）。仅对主配置
+    # 文件生效——其它 yaml 落盘不含该配置节，镜像空态会覆盖旁路。
+    # 旁路刷新的首参是要读取的 config.yaml 路径，workspace 取其上两级
+    # （config/config.yaml → 数据目录），不能传数据目录本身（!10406 检视）。
+    if Path(config_path) == Path(CONFIG_YAML_PATH):
+        refresh_external_cli_state_sidecar(config_path, Path(config_path).parent.parent)
 
 
 def _atomic_replace(src: Path, dst: Path, max_attempts: int = 10) -> None:
@@ -637,6 +674,9 @@ def config_write_lock(*, lock_timeout: float = 10.0, config_path: Path | None = 
         with portalocker.Lock(
             str(_config_lock_path(config_path or CONFIG_YAML_PATH)), timeout=lock_timeout
         ):
+            from jiuwenswarm.common.config_persistence import recover_multimodal_transaction
+
+            recover_multimodal_transaction(config_path or CONFIG_YAML_PATH)
             yield
     finally:
         _CONFIG_WRITE_LOCK.release()
@@ -975,19 +1015,23 @@ def update_symphony_in_config(updates: dict[str, Any]) -> None:
         data["symphony"] = {}
     symphony = data["symphony"]
     _merge_config_dict(symphony, updates)
+    from jiuwenswarm.common.symphony_config import load_symphony_config
+    load_symphony_config(data)
     dump_yaml_round_trip(CONFIG_YAML_PATH, data)
 
 
 def update_skill_retrieval_in_config(updates: dict[str, Any]) -> None:
-    """更新 symphony.skill_retrieval 配置段并写回。"""
+    """更新 symphony.retrieval 配置段并写回。"""
     data = load_yaml_round_trip(CONFIG_YAML_PATH)
     if "symphony" not in data or data["symphony"] is None:
         data["symphony"] = {}
     symphony = data["symphony"]
-    if "skill_retrieval" not in symphony or symphony["skill_retrieval"] is None:
-        symphony["skill_retrieval"] = {}
-    section = symphony["skill_retrieval"]
+    if "retrieval" not in symphony or symphony["retrieval"] is None:
+        symphony["retrieval"] = {}
+    section = symphony["retrieval"]
     _merge_config_dict(section, updates)
+    from jiuwenswarm.common.symphony_config import load_symphony_config
+    load_symphony_config(data)
     dump_yaml_round_trip(CONFIG_YAML_PATH, data)
 
 
@@ -1556,10 +1600,10 @@ def _parse_custom_headers(value: str | dict | None) -> dict[str, Any] | None:
         result = json.loads(value)
         if isinstance(result, dict):
             return result
-        logger.warning(f"custom_headers must be a JSON object, got: {type(result).__name__}")
+        logger.warning("custom_headers must be a JSON object, got: %s", type(result).__name__)
         return None
     except json.JSONDecodeError as e:
-        logger.warning(f"custom_headers JSON parse failed: {e}")
+        logger.warning("custom_headers JSON parse failed: %s", e)
         return None
 
 
@@ -1644,8 +1688,6 @@ def _models_for_write(data: dict[str, Any]) -> dict[str, Any]:
     if _recover_existing_model_fields(models):
         # Preserve the exact original, including comments and invalid values.
         # A failed backup must abort the write rather than lose user data.
-        import shutil
-
         backup = CONFIG_YAML_PATH.with_name(f"{CONFIG_YAML_PATH.name}.models-{uuid.uuid4().hex}.bak")
         shutil.copy2(CONFIG_YAML_PATH, backup)
         logger.warning("Recovered invalid model fields; original configuration saved to %s", backup)
@@ -1996,6 +2038,11 @@ def _remove_initial_model_placeholder(models: dict[str, Any], saved: dict[str, A
 
 def upsert_model_resource(entry: dict[str, Any]) -> dict[str, Any]:
     saved = _normalize_model_entry(entry)
+    clear_max_tokens = (
+        isinstance(entry.get("model_config_obj"), dict)
+        and "max_tokens" in entry["model_config_obj"]
+        and entry["model_config_obj"]["max_tokens"] is None
+    )
     model_config = saved.get("model_config_obj")
     if isinstance(model_config, dict) and "reasoning_level" in model_config:
         from jiuwenswarm.common.reasoning_config import normalize_reasoning_level
@@ -2027,6 +2074,12 @@ def upsert_model_resource(entry: dict[str, Any]) -> dict[str, Any]:
             defaults.append(saved)
             _remove_initial_model_placeholder(candidate, saved)
             _protect_model_key(saved, {})
+        if clear_max_tokens:
+            saved_model_config = saved.get("model_config_obj")
+            if isinstance(saved_model_config, dict):
+                # A null max_tokens is the resource API's explicit "unlimited"
+                # signal. Omission still preserves an existing user setting.
+                saved_model_config.pop("max_tokens", None)
         for key in ("vendor_key", "plan"):
             if key in client_update and client_update[key] in (None, ""):
                 saved.pop(key, None)
@@ -2049,6 +2102,137 @@ def _require_editable_model(models: dict[str, Any], model_id: str) -> None:
         raise ModelSelectionError(MODEL_SELECTION_FORBIDDEN, "AgentOS models are read-only")
 
 
+def _identity_api_key(mcc: dict[str, Any] | None) -> str:
+    """api_key in identity form for equality checks.
+
+    Reference -> returned verbatim (the reference IS the declaration, and is
+    stable across the raw/resolved link split); ciphertext -> decrypted when
+    a provider is installed; plaintext -> verbatim. Every code path that
+    compares api_key for entry identity (duplicate detection, delete
+    matching) must use this form — resolved plaintext drifts with the
+    background resolve, so it cannot serve as identity. The mapping itself
+    is the display form (public_api_key); this wrapper only adapts the
+    model_client_config container.
+    """
+    return public_api_key(str((mcc or {}).get("api_key") or ""))
+
+
+def _duplicate_api_key_matches(stored_mcc: dict[str, Any] | None, incoming_mcc: dict[str, Any] | None) -> bool | None:
+    """Whether two entries' api_keys denote the same credential for dedup.
+
+    Returns tri-state:
+    - None — at least one side resolves to empty; api_key cannot
+      discriminate, the caller must decide by the other fields (model_name,
+      api_base). This keeps an unset ``${KEY_A}`` from colliding with an
+      unset ``${KEY_B}``.
+    - True/False — the resolved credential values are identical/different.
+      ``${VAR}`` forms are expanded before comparing (``${API_KEY}`` and its
+      expanded value are the same credential); ciphertext compares by its
+      decrypted plaintext; an exec: reference compares by its declaration
+      string — two different commands are different entries even if they
+      resolve to the same secret (different rotation semantics), and the
+      reference itself never resolves here.
+    """
+    from jiuwenswarm.common.credentials.resolver import is_reference
+
+    def _form(mcc: dict[str, Any] | None) -> tuple[str, bool]:
+        stored = str((mcc or {}).get("api_key") or "")
+        if not stored:
+            return "", False
+        if is_reference(stored):
+            return stored, True
+        return resolve_env_vars(public_api_key(stored)), False
+
+    stored_form, stored_is_ref = _form(stored_mcc)
+    incoming_form, incoming_is_ref = _form(incoming_mcc)
+    if not stored_form or not incoming_form:
+        return None
+    if stored_is_ref or incoming_is_ref:
+        # A reference only ever equals the same reference string; a reference
+        # never equals a plaintext key even if it resolves to the same value.
+        return stored_is_ref == incoming_is_ref and stored_form == incoming_form
+    return stored_form == incoming_form
+
+
+def public_api_key(stored_api_key: str) -> str:
+    """api_key in the form shown to the frontend.
+
+    Reference -> verbatim (the edit dialog manages the command itself);
+    ciphertext -> decrypted when a provider is installed; plaintext ->
+    verbatim. Every surface that echoes api_key back to a user (models.get,
+    models.list, TUI config.get/models.list) must pass stored values through
+    this before display — and the save path recognizes the echoed reference
+    via ``is_reference`` so a round-trip preserves it.
+    """
+    key = str(stored_api_key or "")
+    if not key:
+        return ""
+    from jiuwenswarm.common.credentials.resolver import is_reference
+
+    if is_reference(key):
+        return key
+    crypto = get_crypto_provider()
+    if crypto is not None:
+        try:
+            return crypto.decrypt(key)
+        except Exception:
+            return key
+    return key
+
+
+def raw_api_key_by_model_id(model_id: str) -> str | None:
+    """Stored exec: reference for ``model_id``, or None for any other form.
+
+    Only exec: references need the raw file: get_config() has already
+    replaced them with resolved plaintext, so echoing the resolved chain
+    leaks the secret and a later save would overwrite the reference.
+    Plaintext / ${VAR} / ciphertext entries keep the resolved-chain display
+    they always had — mapping them raw would show a literal ${VAR}
+    placeholder and (worse) make a re-save compare as "changed" against the
+    resolved snapshot, encrypting the placeholder into ciphertext.
+    Login/free models have no defaults entry on disk; callers treat None as
+    "no raw override" and use the resolved value.
+    """
+    target = str(model_id or "").strip()
+    if not target:
+        return None
+    return raw_api_keys_by_model_id().get(target)
+
+
+def raw_api_keys_by_model_id() -> dict[str, str]:
+    """Batch form of raw_api_key_by_model_id for list endpoints.
+
+    One file read builds the model_id -> reference-string map (references
+    only; see raw_api_key_by_model_id). Covers defaults/default/agentos so
+    an agentos reference does not fall back to its resolved plaintext.
+    """
+    raw = get_config_raw()
+    models = raw.get("models") if isinstance(raw, dict) else None
+    if not isinstance(models, dict):
+        return {}
+    result: dict[str, str] = {}
+    for section in ("defaults", "default", "agentos"):
+        entries = models.get(section)
+        if isinstance(entries, dict):
+            entries = [entries]
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            # Damaged legacy YAML can hold a non-dict model_client_config
+            # (recovery repairs it only on write, not on read) — skip instead
+            # of letting `.get` raise inside models.list.
+            client = entry.get("model_client_config")
+            if not isinstance(client, dict):
+                continue
+            model_id = str(entry.get("model_id") or "").strip()
+            key = str(client.get("api_key") or "")
+            if model_id and key.startswith(EXEC_PREFIX):
+                result[model_id] = key
+    return result
+
+
 def _protect_model_key(update: dict[str, Any], current: dict[str, Any]) -> None:
     """Preserve omitted credentials; encrypt changed keys with the installed provider."""
     client = update.get("model_client_config") or {}
@@ -2057,6 +2241,14 @@ def _protect_model_key(update: dict[str, Any], current: dict[str, Any]) -> None:
     key = client["api_key"]
     previous = (current.get("model_client_config") or {}).get("api_key")
     if key == previous or not key:
+        return
+    from jiuwenswarm.common.credentials.resolver import is_reference
+
+    # An exec: reference is neither plaintext nor ciphertext — store as-is.
+    # This also keeps the re-submitted-unchanged flow intact: the
+    # panel echoes the stored reference, the equality check above matches,
+    # and no encrypt/decrypt round-trip can corrupt it.
+    if is_reference(key):
         return
     crypto = get_crypto_provider()
     if crypto is not None:
@@ -2193,6 +2385,8 @@ def get_default_models(config: dict[str, Any] | None = None) -> list[dict[str, A
             "client_provider": os.getenv("MODEL_PROVIDER", ""),
             # endpoint_profile：仅 OpenAI 协议生效的端点方言；Anthropic 时忽略。
             "endpoint_profile": os.getenv("ENDPOINT_PROFILE", "") or "",
+            # vendor_key：供应商方言标识（如 opencode-go），仅少数网关需要。
+            "vendor_key": os.getenv("VENDOR_KEY", "") or "",
             "custom_headers": _parse_custom_headers(os.getenv("CUSTOM_HEADERS", None)),
             "timeout": 1800,
             "verify_ssl": False,
@@ -2861,14 +3055,17 @@ def replace_teams_in_config(front_payload: dict[str, Any]) -> None:
             data.get("web_config_panel", {}).pop("agent_team_agents", None)
     if "modes" not in data or not isinstance(data["modes"], dict):
         data["modes"] = {}
-    # The team editor payload carries no built-in model catalog, so the one
-    # configured for each CLI kind is carried over from the current config.
+    # Keep settings owned by other panels and built-in CLI model catalogs
+    # when the team editor replaces the team mapping.
     existing_teams = data["modes"].get("team")
     if isinstance(existing_teams, dict):
+        reminder_team, reminder_key = TEAM_CODE_TODO_REMINDER_DISABLED_CONFIG_PATH[-2:]
         for team_name, transformed_team in team_mapping.items():
             existing_team = existing_teams.get(team_name)
             if not isinstance(existing_team, dict):
                 continue
+            if team_name == reminder_team and reminder_key in existing_team:
+                transformed_team.setdefault(reminder_key, existing_team[reminder_key])
             agents = transformed_team.get("external_cli_agents")
             if isinstance(agents, list):
                 _carry_over_builtin_models(agents, existing_team.get("external_cli_agents"))
@@ -2918,6 +3115,25 @@ def _set_config_path(path: tuple[str, ...], value: Any) -> None:
     dump_yaml_round_trip(CONFIG_YAML_PATH, data)
 
 
+def update_team_goal_settings_in_config(
+    *, scheduled: bool | None, enabled: bool | None,
+) -> None:
+    """Commit dispatch mode and leader goal together under the config lock."""
+    from jiuwenswarm.common.team_goal_config import resolve_leader_goal_update
+
+    def mutate(data: dict[str, Any]) -> dict[str, Any]:
+        modes = _ensure_config_object(data, "modes", "modes")
+        teams = _ensure_config_object(modes, "team", "modes.team")
+        team = _ensure_config_object(teams, "jiuwen_team", "modes.team.jiuwen_team")
+        mode, goal = resolve_leader_goal_update(team, scheduled=scheduled, enabled=enabled)
+        leader = _ensure_config_object(team, "leader", "modes.team.jiuwen_team.leader")
+        team["dispatch_mode"] = mode
+        leader["goal"] = goal
+        return data
+
+    update_config(mutate)
+
+
 def update_team_scheduled_dispatch_in_config(enabled: bool) -> None:
     """Update ``modes.team.jiuwen_team.dispatch_mode`` (scheduled / autonomous)."""
     _set_config_path(TEAM_DISPATCH_MODE_CONFIG_PATH, "scheduled" if enabled else "autonomous")
@@ -2931,6 +3147,19 @@ def update_team_task_verification_in_config(enabled: bool) -> None:
 def update_team_member_messaging_in_config(enabled: bool) -> None:
     """Update ``modes.team.jiuwen_team.enable_member_messaging`` in config.yaml."""
     _set_config_path(TEAM_MEMBER_MESSAGING_CONFIG_PATH, bool(enabled))
+
+
+def get_team_code_todo_reminder_disabled(config: dict[str, Any]) -> bool:
+    """Read the scheduled Code team reminder preference, defaulting to false."""
+    value: Any = config
+    for segment in TEAM_CODE_TODO_REMINDER_DISABLED_CONFIG_PATH:
+        value = value.get(segment) if isinstance(value, dict) else None
+    return coerce_config_bool(value, default=False)
+
+
+def update_team_code_todo_reminder_disabled_in_config(disabled: bool) -> None:
+    """Persist the scheduled Code team reminder preference."""
+    _set_config_path(TEAM_CODE_TODO_REMINDER_DISABLED_CONFIG_PATH, disabled)
 
 
 def coerce_subtask_depth(value: Any) -> int:
@@ -3585,6 +3814,35 @@ def _deep_merge(
 _LEGACY_AGENT_SUBMODE_KEYS: tuple[str, ...] = ("plan", "fast", "agent.plan", "agent.fast")
 
 
+def _migrate_legacy_symphony_config(
+    user_data: dict[str, Any],
+    template_data: dict[str, Any],
+    user_config_path: Path,
+) -> bool:
+    """Convert the Symphony section before merging defaults and back up the original YAML."""
+    symphony = user_data.get("symphony")
+    if not isinstance(symphony, dict):
+        return False
+    from jiuwenswarm.common.symphony_config import load_symphony_config, migrate_legacy_symphony_config
+
+    converted = migrate_legacy_symphony_config(symphony, template=template_data.get("symphony"))
+    if converted == symphony:
+        return False
+
+    load_symphony_config({"symphony": converted})
+    backup = user_config_path.with_name(f"{user_config_path.name}.symphony-legacy.bak")
+    if backup.exists():
+        backup = backup.with_name(f"{backup.stem}.{uuid.uuid4().hex}.bak")
+    shutil.copy2(user_config_path, backup)
+    user_data["symphony"] = converted
+    logger.warning(
+        "Migrated legacy Symphony settings; original configuration is in %s. "
+        "Old indexes need rebuilding; retired builder model/cache options are not used by the Runtime.",
+        backup,
+    )
+    return True
+
+
 def _migrate_legacy_agent_submode_memory(user_data: dict[str, Any]) -> None:
     modes = user_data.get("modes")
     if not isinstance(modes, dict):
@@ -3705,6 +3963,7 @@ def migrate_config_from_template(
         # 必须在 _deep_merge 之前执行，否则旧子节点会被静默丢弃而非迁移。
         _migrate_legacy_agent_submode_memory(user_data)
         _migrate_legacy_kv_cache_affinity_config(user_data)
+        legacy_symphony_migrated = _migrate_legacy_symphony_config(user_data, template_data, user_config_path)
         # team_observability / agent_observability -> observability.{team,agent}
         # 必须在 _deep_merge 之前执行：合并会先按模板塞入默认的 observability 段，
         # 旧段里用户改过的 exporter / endpoint 等就会被模板默认值挡住。
@@ -3723,6 +3982,8 @@ def migrate_config_from_template(
                 user_data["extensions"] = {}
         changes = _deep_merge(template_data, user_data, prune=prune)
         if legacy_observability_migrated:
+            changes += 1
+        if legacy_symphony_migrated:
             changes += 1
 
         # Guard against an empty result overwriting a valid user config

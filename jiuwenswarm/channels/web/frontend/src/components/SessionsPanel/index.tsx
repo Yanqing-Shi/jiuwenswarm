@@ -1,3 +1,4 @@
+import { gatewayFetch } from '../../services/gatewayFetch';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CircleAlert } from 'lucide-react';
@@ -8,6 +9,7 @@ import { webRequest } from '../../services/webClient';
 import { getArchiveErrorCode, getArchiveErrorFinishingCause } from '../../features/workspace/archivedTaskClient';
 import { useChatStore } from '../../stores/chatStore';
 import { getWorkspaceModeRevision, useWorkspaceStore } from '../../stores/workspaceStore';
+import { isEnterprise } from '../../edition';
 import { toDisplaySessionTitle } from '../../utils/documentMessage';
 
 function SessionErrorIndicator({ sessionId }: { sessionId: string }) {
@@ -24,6 +26,7 @@ interface SessionsPanelProps {
   currentSessionId: string;
   isConnected: boolean;
   isProcessing: boolean;
+  mode?: string;
   onRestoreSession: (sessionId: string, mode?: string) => void | Promise<void>;
 }
 
@@ -263,6 +266,7 @@ export function SessionsPanel({
   currentSessionId,
   isConnected,
   isProcessing,
+  mode,
   onRestoreSession,
 }: SessionsPanelProps) {
   const { t } = useTranslation();
@@ -321,7 +325,7 @@ export function SessionsPanel({
         const fetchDirEntries = async (dir: string, depth: number): Promise<SessionFileItem[]> => {
           if (!isCurrent()) return [];
           const encodedDir = encodeURIComponent(dir);
-          const resp = await fetch(`/file-api/list-files?dir=${encodedDir}`, { cache: 'no-store' });
+          const resp = await gatewayFetch(`/file-api/list-files?dir=${encodedDir}`, { cache: 'no-store' });
           if (!resp.ok) {
             const text = await resp.text();
             throw new Error(`HTTP ${resp.status}: ${text.substring(0, 120)}`);
@@ -350,7 +354,7 @@ export function SessionsPanel({
         // Check for todo.json in DeepAgent workspace todo directory
         const todoPath = `agent/workspace/todo/${sessionId}/todo.json`;
         try {
-          const todoResp = await fetch(`/file-api/file-content?path=${encodeURIComponent(todoPath)}`, { cache: 'no-store' });
+          const todoResp = await gatewayFetch(`/file-api/file-content?path=${encodeURIComponent(todoPath)}`, { cache: 'no-store' });
           if (todoResp.ok) {
             rows.push({
               name: 'todo.json',
@@ -509,10 +513,11 @@ export function SessionsPanel({
   const isWebSession = Boolean(
     selectedSessionId?.startsWith('sess_') || selectedSessionId?.startsWith('web_')
   );
-  const canRestoreSelectedSession = isWebSession && isConnected && !isProcessing;
+  const restoreWhileProcessing = isEnterprise() && mode === 'team';
+  const canRestoreSelectedSession = isWebSession && isConnected && (restoreWhileProcessing || !isProcessing);
   const restoreButtonTitle = !isConnected
     ? t('sessions.restoreDisabledNotConnected')
-    : isProcessing
+    : isProcessing && !restoreWhileProcessing
       ? t('sessions.restoreDisabledProcessing')
       : !isWebSession
         ? t('sessions.restoreDisabledUnsupported')

@@ -5,7 +5,7 @@ export type SettingsModuleId =
   'general' | 'models' | 'agent' | 'browser' | 'channels' | 'personalContext' | 'archivedTasks' | 'security' | 'experimental' | (string & {});
 export type SettingsAccessLevel = 'hidden' | 'readOnly' | 'editable';
 export type SettingsCompositionMode = 'base' | 'extended';
-export type SettingsSource = 'config' | 'browser' | 'locale';
+export type SettingsSource = 'config' | 'browser' | 'locale' | 'multimodal';
 export type SettingValue = string | number | boolean;
 export type SettingsAccessNode =
   | { kind: 'module'; moduleId: string }
@@ -66,6 +66,8 @@ export type SettingItemDefinition =
       component: 'select';
       key: string;
       options: readonly SettingSelectOption[];
+      optionsFromSource?: boolean;
+      configure?: ComponentType<{ onClose: () => void }>;
     })
   | (SettingItemBase & {
       component: 'input';
@@ -87,6 +89,8 @@ export interface SettingsModuleDefinition {
   id: SettingsModuleId;
   titleKey: I18nKey;
   descriptionKey?: I18nKey;
+  /** The module renders its own page title and introductory content. */
+  hideHeader?: boolean;
   icon: ElementType;
   source?: SettingsSource;
   sections: readonly SettingsSectionDefinition[];

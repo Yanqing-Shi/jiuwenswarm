@@ -1,15 +1,18 @@
-import type { Entry } from '../conversationModel';
+import type { Entry, Failure } from '../conversationModel';
 import { copy, type DocumentCopy } from '../copy';
 import type { UndoState } from '../paneController';
+import type { OpenDocument } from '../sessionFacade';
 import { activityGroup, running, StepClock, tickSeconds, type Step } from './activity';
 import { h, syncChildren } from './dom';
+import type { ToolCards } from './editCards';
 import { writeClipboard } from './clipboard';
 import { icon, type IconName } from './icons';
 import { renderMarkdown } from './markdown';
 
 /** How close to the end a reader must be for the transcript to follow new text. */
 const FOLLOW_THRESHOLD_PX = 72;
-const BEE = '/assets/bee.png';
+/** Relative to the page, which the desktop serves under `/office/`. */
+const BEE = 'assets/bee.png';
 /** How long Copy shows that it copied. */
 const COPIED_MS = 2000;
 
@@ -18,11 +21,13 @@ interface TurnEnd { reply: string; changes?: string }
 
 /**
  * A transcript item: one entry, a run of steps shown as one timeline, the
- * actions under a finished turn, or the dots while the agent works unseen.
+ * cards under a finished call, the actions under a finished turn, or the dots
+ * while the agent works unseen.
  */
 type Item =
   | { id: string; entry: Exclude<Entry, Step | { kind: 'changes' }> }
   | { id: string; steps: Step[] }
+  | { id: string; cards: Extract<Step, { kind: 'tool' }> }
   | { id: string; end: TurnEnd }
   | { id: string; thinking: true };
 
@@ -31,7 +36,9 @@ function isStep(entry: Entry): entry is Step {
 }
 
 /** A turn starts at a message to the agent; it ends at the next one, or when the agent is done. */
-function items(entries: readonly Entry[], working: boolean, openReply: string | undefined): Item[] {
+function items(
+  entries: readonly Entry[], working: boolean, openReply: string | undefined, cards: ToolCards | undefined,
+): Item[] {
   const result: Item[] = [];
   let turn = { id: 'start', end: { reply: '' } as TurnEnd };
   const close = (): void => {
@@ -53,6 +60,9 @@ function items(entries: readonly Entry[], working: boolean, openReply: string | 
     if (!isStep(entry)) result.push({ id: entry.id, entry });
     else if (last && 'steps' in last) last.steps.push(entry);
     else result.push({ id: entry.id, steps: [entry] });
+    if (entry.kind === 'tool' && entry.status === 'done' && entry.args && cards?.tools.has(entry.name)) {
+      result.push({ id: `cards:${entry.id}`, cards: entry });
+    }
   }
   if (!working) close();
   else if (unseen(entries.at(-1), openReply)) result.push({ id: 'thinking', thinking: true });
@@ -67,21 +77,27 @@ function unseen(last: Entry | undefined, openReply: string | undefined): boolean
 
 export interface TranscriptState {
   entries: readonly Entry[];
-  documents: ReadonlyMap<string, string>;
+  documents: ReadonlyMap<string, OpenDocument>;
   /** The reply that streams now. */
   openReply?: string;
   /** The agent works on a turn and waits for no answer. */
   working: boolean;
+  /** What the dots say while the agent works unseen: it compacts the conversation, or nothing has come for a while. */
+  hint?: string;
   loadingHistory: boolean;
   /** Whether a suggestion of the empty conversation can go to the composer. */
   canSuggest: boolean;
   undo: UndoState;
+  /** The failure that offers its retry. */
+  retry?: string;
 }
 
-/** The user's actions on a turn's undo. */
-export interface UndoActions {
+/** The user's actions on a turn's undo, and a failure's way out. */
+export interface TranscriptActions {
   undo: (card: string, overwrite?: boolean) => void;
   cancelUndo: () => void;
+  retry: () => void;
+  newConversation: () => void;
 }
 
 /**
@@ -105,7 +121,10 @@ export class Transcript {
   private readonly suggestions: HTMLButtonElement[];
   private readonly welcomeNode: HTMLElement;
 
-  constructor(words: DocumentCopy, suggest: (text: string) => void, private readonly actions: UndoActions) {
+  constructor(
+    words: DocumentCopy, suggest: (text: string) => void, private readonly actions: TranscriptActions,
+    private readonly cards?: ToolCards,
+  ) {
     this.suggestions = words.suggestions.map(text => h('button', {
       type: 'button', class: 'suggestion', onclick: () => suggest(text),
     }, text));
@@ -123,7 +142,7 @@ export class Transcript {
     const focusKey = document.activeElement?.closest('[data-key]')?.getAttribute('data-key');
     this.clock.note(state.entries.filter(isStep), Date.now());
     const next = new Map<string, { signature: unknown[]; node: HTMLElement }>();
-    const nodes = items(state.entries, state.working, state.openReply).map(item => {
+    const nodes = items(state.entries, state.working, state.openReply, this.cards).map(item => {
       const signature = this.signature(item, state);
       const before = this.rendered.get(item.id);
       const node = before && sameSignature(before.signature, signature) ? before.node : this.itemNode(item, state);
@@ -149,8 +168,11 @@ export class Transcript {
   }
 
   private signature(item: Item, state: TranscriptState): unknown[] {
-    if ('entry' in item) return [item.entry, state.openReply === item.id];
-    if ('thinking' in item) return [];
+    if ('entry' in item) {
+      return [item.entry, state.openReply === item.id, state.retry === item.id, this.copied === item.id];
+    }
+    if ('thinking' in item) return [state.hint];
+    if ('cards' in item) return [item.cards.args, this.cards?.version()];
     if ('end' in item) {
       const { reply, changes } = item.end;
       const { offers, confirm } = state.undo;
@@ -178,15 +200,35 @@ export class Transcript {
         },
       });
     }
+    if ('cards' in item) return this.cards?.render(item.cards.id, item.cards.args ?? {}) ?? h('div', { hidden: true });
     if ('thinking' in item) {
-      return h('div', { class: 'entry thinking', role: 'img', 'aria-label': copy.thinking }, h('span'), h('span'), h('span'));
+      return h('div', { class: 'entry thinking', role: 'img', 'aria-label': state.hint ?? copy.thinking },
+        h('span'), h('span'), h('span'), state.hint ? h('p', { class: 'thinking-hint' }, state.hint) : null);
     }
     if ('end' in item) {
       return turnActions(item.id, item.end, state.undo, this.copied === item.id, {
         ...this.actions, copy: () => void this.copy(item.id, item.end.reply),
       });
     }
-    return entryNode(item.entry, state.openReply === item.id);
+    const { entry } = item;
+    if (entry.kind === 'notice' && entry.failure) return this.failureNode(entry, entry.failure, state.retry === entry.id);
+    return entryNode(entry, state.openReply === item.id);
+  }
+
+  /** A failure in its plain words, and its way out: retry while offered, a new conversation, or the details. */
+  private failureNode(entry: { id: string; text: string }, failure: Failure, canRetry: boolean): HTMLElement {
+    const { action, detail } = failure;
+    const copied = this.copied === entry.id;
+    const ways = {
+      retry: { label: copy.retry, run: this.actions.retry },
+      newConversation: { label: copy.newConversation, run: this.actions.newConversation },
+      copyDetails: { label: copied ? copy.copied : copy.copyDetails, run: () => void this.copy(entry.id, detail) },
+    };
+    // A retry no longer offered (a replayed failure, or a turn that wrote) still leaves the details to take along.
+    const way = action === 'retry' && !canRetry ? ways.copyDetails : ways[action];
+    return h('p', { class: 'entry entry-notice tone-error' }, icon('alert'), h('span', {}, entry.text),
+      h('button', { type: 'button', class: 'notice-action', 'data-key': `failure:${entry.id}`, onclick: way.run },
+        way.label));
   }
 
   private async copy(id: string, text: string): Promise<void> {
@@ -217,7 +259,8 @@ function sameSignature(a: unknown[], b: unknown[]): boolean {
  * offered. Undo asks in one line first when it would overwrite later changes.
  */
 function turnActions(
-  id: string, end: TurnEnd, undo: UndoState, copied: boolean, actions: UndoActions & { copy: () => void },
+  id: string, end: TurnEnd, undo: UndoState, copied: boolean,
+  actions: Pick<TranscriptActions, 'undo' | 'cancelUndo'> & { copy: () => void },
 ): HTMLElement {
   const { changes } = end;
   if (changes !== undefined && undo.confirm === changes) {
@@ -242,7 +285,14 @@ function actionButton(name: IconName, label: string, key: string, onclick: () =>
 function entryNode(entry: Exclude<Entry, Step | { kind: 'changes' }>, streaming: boolean): HTMLElement {
   switch (entry.kind) {
     case 'user':
-      return h('div', { class: 'entry entry-user' }, h('div', { class: 'bubble' }, entry.text));
+      return h('div', { class: 'entry entry-user' },
+        entry.images ? h('div', { class: 'user-images' }, ...entry.images.map(({ filename, src }) => (src
+          ? h('img', { class: 'user-image', src, alt: filename })
+          : h('span', { class: 'chip', title: filename }, icon('image'), filename)))) : null,
+        entry.files ? h('div', { class: 'user-images' }, ...entry.files.map(({ filename, size }) => h('span', {
+          class: 'chip', title: filename }, icon('files'), filename, size === undefined ? '' : ` · ${copy.fileSize(size)}`)))
+          : null,
+        entry.text ? h('div', { class: 'bubble' }, entry.text) : null);
     case 'assistant':
       return h('div', { class: `entry entry-assistant${streaming ? ' is-streaming' : ''}` },
         h('div', { class: 'reply' }, ...renderMarkdown(entry.text)));

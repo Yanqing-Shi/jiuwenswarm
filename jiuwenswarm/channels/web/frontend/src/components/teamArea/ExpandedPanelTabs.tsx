@@ -7,7 +7,7 @@ import RecentTasksIcon from '../../assets/work-mode/recent-tasks.svg?react';
 import WebsiteBuildIcon from '../../assets/work-mode/website-build.svg?react';
 import artifactsIcon from '../../assets/artifacts.svg';
 import reviewIcon from '../../assets/review.svg';
-import { CloseButton } from '../ui';
+import { CloseButton } from '../ui/CloseButton/CloseButton';
 import '../subagent/Subagent.css';
 import '../ChatPanel/ChatPanel.css';
 
@@ -16,8 +16,9 @@ export interface PanelTabItem {
   label: string;
   icon?: ReactNode;
   count?: string | number;
-  /** 页签文字右侧渲染关闭按钮（当前仅 browser 页签使用） */
+  /** Allow the host to dismiss this page. */
   closable?: boolean;
+  closeLabel?: string;
 }
 
 export function useExpandedPanelTabs({
@@ -82,6 +83,8 @@ export function ExpandedPanelTabs({
   isFullscreen,
   testIdPrefix = 'tool-panel',
   tabListLabel,
+  actions,
+  idPrefix,
 }: {
   tabs: PanelTabItem[];
   activeTab: string;
@@ -92,36 +95,40 @@ export function ExpandedPanelTabs({
   isFullscreen?: boolean;
   testIdPrefix?: string;
   tabListLabel?: string;
+  actions?: ReactNode;
+  idPrefix?: string;
 }) {
   const { t } = useTranslation();
-  const tabPanelId = useId();
+  const generatedId = useId();
+  const tabPanelId = idPrefix ?? generatedId;
 
   return (
-    <div data-testid={`${testIdPrefix}-expanded-header`} className="single-agent-tool-tabs">
+    <div data-testid={`${testIdPrefix}-expanded-header`} className="single-agent-tool-tabs min-w-0">
       <div
         data-testid={`${testIdPrefix}-expanded-tabs`}
-        className="single-agent-tool-tabs__list"
+        className="single-agent-tool-tabs__list overflow-x-auto"
         role="tablist"
         aria-label={tabListLabel ?? t('team.toolTabs')}
       >
         {tabs.map((tab) => {
           const isActive = activeTab === tab.key;
           const countSuffix = tab.count !== undefined ? ` (${tab.count})` : '';
+          const closeLabel = tab.closeLabel ?? (tab.key === 'browser' ? t('browser.pane.closeTab') : `${t('common.close')} ${tab.label}`);
           return (
             <div
               key={tab.key}
               data-testid={`${testIdPrefix}-tab`}
               data-variant={tab.key}
-              id={`${tabPanelId}-${tab.key}`}
+              id={`${tabPanelId}-${encodeURIComponent(tab.key)}`}
               role="tab"
               tabIndex={0}
               aria-selected={isActive}
               aria-controls={`${tabPanelId}-panel`}
-              className={`single-agent-tool-tab group ${isActive ? 'single-agent-tool-tab--active' : ''}`}
+              title={tab.label}
+              className={`single-agent-tool-tab group shrink-0 ${isActive ? 'single-agent-tool-tab--active' : ''}`}
               onClick={() => onTabChange(tab.key)}
               onKeyDown={(event) => {
-                // 仅响应标签自身聚焦时的 Enter/Space；事件若来自内部关闭按钮（会冒泡），
-                // 不能 preventDefault——否则按钮原生 click 不触发，关闭失效反而切页
+                // Preserve native close-button activation when keyboard events bubble.
                 if (event.target !== event.currentTarget) return;
                 if (event.key !== 'Enter' && event.key !== ' ') return;
                 event.preventDefault();
@@ -140,8 +147,8 @@ export function ExpandedPanelTabs({
                   <CloseButton
                     size={16}
                     testId={`${testIdPrefix}-tab-close`}
-                    ariaLabel={t('browser.pane.closeTab')}
-                    title={t('browser.pane.closeTab')}
+                    ariaLabel={closeLabel}
+                    title={closeLabel}
                     onClick={() => onTabClose(tab.key)}
                   />
                 </span>
@@ -151,7 +158,8 @@ export function ExpandedPanelTabs({
         })}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
+        {actions}
         {onToggleFullscreen && (
           <button
             onClick={onToggleFullscreen}
