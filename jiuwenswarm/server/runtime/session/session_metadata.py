@@ -202,6 +202,8 @@ def session_mode_switch_blocker(metadata: dict[str, Any]) -> str | None:
 
     Agent groups, external CLI harnesses, and scheduled tasks bind one executor
     for the Session's whole life; changing its mode would orphan that binding.
+    An application role fixes its form at creation: a single character, a lead
+    consulting member Sessions, or a native Team roster selected by its mode.
     """
     if str(metadata.get("agent_group_name") or "").strip() or isinstance(
         metadata.get("team_group_identity"), dict
@@ -211,6 +213,8 @@ def session_mode_switch_blocker(metadata: dict[str, Any]) -> str | None:
         return "external agent sessions cannot switch mode"
     if str(metadata.get("cron_id") or "").strip():
         return "scheduled task sessions cannot switch mode"
+    if metadata.get("execution_profile") == "app_role":
+        return "application role sessions cannot switch mode"
     return None
 
 
