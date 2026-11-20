@@ -124,3 +124,42 @@ Swarm 运行时代码不直接调用它。
 注意：本分支所基于的 `fix/tui-session-mode-switch` 是尚未合入的 PR，远端已多次 rebase（2026-11-13 晚为 `dd16c87b5`），
 本分支仍在旧副本 `7853595c7` 上；上述基线对比以旧副本为准，迁移到新基线尚未进行。
 
+
+## 2026-11-21 04:44（Asia/Singapore）：共享窗口不再写入上游的快照文件与 checkpoint
+
+用户确认后实施（开发会话，2026-11-20）。
+
+**起因**：分支变基到上游 `9d18e0722` 后，上游新增的上下文快照（`context_snapshot.py`）在每次模型请求前、每轮工具结果装入后保存当前窗口。
+共享记录上的 Session 因此把同一个窗口写三份：core 提交共享记录；Swarm 写快照文件；随后 `session.update_state({"context": states})`
+又把完整窗口放回 checkpoint（core 的 `save_contexts` 本来有意不把共享窗口放进 Session 状态）。共享 Session 恢复时只读共享记录
+（`session_ops_service` 的 bound 分支），后两份从不被读取。
+
+**实测**（本机，Swarm 配置的 SQLite 持久化 checkpointer 外加 `ContextCheckpointer`，合成消息，12 次取中位数，单次保存步骤）：
+
+| 窗口 | 改前整步 | 其中共享记录 | 其中快照文件 | 其中 checkpoint | 改后整步 |
+|---|---|---|---|---|---|
+| ~10k tokens | 12.2 ms | 2.0 ms | 4.4 ms | 3.8 ms | 3.4 ms |
+| ~50k tokens | 23.7 ms | 2.8 ms | 10.8 ms | 5.6 ms | 5.0 ms |
+| ~150k tokens | 52.1 ms | 5.0 ms | 26.0 ms | 9.8 ms | 7.1 ms |
+| ~250k tokens | 82.6 ms | 9.2 ms | 41.4 ms | 14.7 ms | 11.4 ms |
+
+**实现**：`prepare_context_snapshot` 是显式保存（`save_context_snapshot`）与原生提交（`ContextCheckpointer._commit_bound`）共用的准备步骤。
+其中若 `states` 含有绑定共享记录的窗口，则不写快照文件、把 `SNAPSHOT_KEY` 置空，只返回该 Session 的其余（非共享）context，
+由调用方照常写入 checkpoint。checkpoint 提交本身保留：待答审批（中断状态）仍随它持久化。共享记录仍由 core 在 `save_contexts` 中
+先于 checkpoint 提交写入，顺序未变。非共享 Session 的行为不变。
+
+**不变的行为**：共享 Session 的恢复路径没有改动（本来就不读快照）。共享记录与 checkpoint 是两次独立写入、没有回放边界，这一点改动前后相同。
+
+**上游用例 `test_permission_cold_snapshot.py`**：其中两个经 Runtime 建 Session 的用例在每次原生提交处读取快照，此前在本分支上只是因为
+“没人读的快照”仍被写出才通过。现在这两个用例对两种存储各跑一遍（`storage` 参数：`snapshot` / `shared`）：`snapshot` 下保留原有的
+快照与回放边界断言；`shared` 下改为在提交时读取共享记录，并断言没有快照引用、checkpoint 中没有窗口副本、没有快照文件。
+完整的重启恢复流程在两种存储下都执行。此前本分支不覆盖“Runtime 建出的 Session 走快照路径”，现在覆盖。
+
+**测试**：新增 `test_snapshot_step_leaves_a_shared_window_to_its_record`（改动前失败）。
+
+验证（Linux / Python 3.12，仓库 `.venv`，本地 core `16776cbe8` 加未提交的去拷贝修复，`-o addopts='' --asyncio-mode=auto`）：
+`test_context_snapshots.py`、`test_context_checkpointer.py`、`test_checkpoint_memory_budget.py`、`test_history_review_regressions.py`、
+`agentserver/test_session_input_consumption.py`、`agentserver/permissions`、`runtime` 共 **3615 passed, 2 failed**；
+2 项失败是 `test_shared_conversation_runtime.py` 中依赖执行顺序的 team 用例（单独运行该文件 51 passed，改动前同样失败，原因未定位）。
+
+**未覆盖**：真实模型下的长会话；视频双工扩展（`video_duplex`）与共享 Session 并用时对 `SNAPSHOT_KEY` 的处理未核对。

@@ -787,3 +787,36 @@ async def test_leader_admission_for_work_that_never_starts_is_returned(shared_ru
         acquire_operation("session", env.sid).close()
     finally:
         await _stop_shared_leader(leader)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_step_leaves_a_shared_window_to_its_record(tmp_path, monkeypatch):
+    """A shared window is not copied into a snapshot file or the checkpoint; other contexts still are."""
+    from openjiuwen.core.context_engine import ConversationBinding, ConversationKey
+
+    from jiuwenswarm.server.runtime.session import context_snapshot as snapshots
+
+    monkeypatch.setattr(lifecycle, "get_agent_sessions_dir", lambda: tmp_path / "sessions")
+    monkeypatch.setattr(lifecycle, "get_agent_root_dir", lambda: tmp_path)
+    shared = ConversationBinding(ConversationKey("one-session", "main"), SimpleNamespace())
+    values = {snapshots.SNAPSHOT_KEY: {"file": "stale.json"}}
+    session = SimpleNamespace(
+        get_session_id=lambda: "one-session",
+        get_conversation_binding=lambda context_id="default_context_id": (
+            shared if context_id == "default_context_id" else None
+        ),
+        get_state=values.get,
+        update_state=values.update,
+    )
+    engine = SimpleNamespace(get_context=lambda session_id: SimpleNamespace())
+    local = {"messages": [UserMessage(content="kept in the checkpoint")], "offload_messages": {}}
+    states = {
+        "default_context_id": {"messages": [UserMessage(content="lives in the record")], "offload_messages": {}},
+        "side_context": local,
+    }
+
+    prepared = await snapshots.prepare_context_snapshot(context_engine=engine, session=session, states=states)
+
+    assert prepared == {"side_context": local}
+    assert values[snapshots.SNAPSHOT_KEY] is None
+    assert not list(tmp_path.rglob("*.json"))
