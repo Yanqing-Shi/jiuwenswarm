@@ -385,6 +385,13 @@ async def prepare_context_snapshot(*, context_engine: Any, session: Any, states:
     if context is None:
         session.update_state({SNAPSHOT_KEY: None})
         return states
+    local_states = _without_shared_windows(session, states)
+    if len(local_states) != len(states):
+        # Core has just committed a shared window to its conversation record, the only copy a
+        # shared Session restores from. A snapshot file or a checkpoint copy of it would never
+        # be read, so the checkpoint keeps only the Session's other contexts.
+        session.update_state({SNAPSHOT_KEY: None})
+        return local_states
     try:
         async with context_snapshot_lock(context):
             return await _prepare_context_snapshot_locked(context_engine=context_engine, session=session,
@@ -397,6 +404,19 @@ async def prepare_context_snapshot(*, context_engine: Any, session: Any, states:
         ) from exc
     except Exception as exc:
         raise HistoryReplayError("Context persistence preparation failed") from exc
+
+
+def _without_shared_windows(session: Any, states: dict[str, Any]) -> dict[str, Any]:
+    """Leave out every window that lives in a shared conversation record."""
+    from openjiuwen.core.context_engine import ConversationBinding
+
+    get_binding = getattr(session, "get_conversation_binding", None)
+    if not callable(get_binding):
+        return states
+    return {
+        context_id: state for context_id, state in states.items()
+        if not isinstance(get_binding(context_id), ConversationBinding)
+    }
 
 
 async def _prepare_context_snapshot_locked(*, context_engine: Any, session: Any, context: Any,
