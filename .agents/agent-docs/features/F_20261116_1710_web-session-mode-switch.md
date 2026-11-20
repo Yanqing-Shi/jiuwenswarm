@@ -200,6 +200,32 @@ Gateway MR !173 的检视继续指出两点：未记录归属者（`user_id` 为
 
 升级后，经补建路径产生的无归属会话对已识别用户不再可切换模式（`NOT_FOUND`），这类会话可在新对话中继续；已被旧逻辑补写过归属者的会话不受影响。
 
+## 2026-11-21 04:13（Asia/Singapore）续写：企业版沿用上游规则，服务端拒绝 `mode.set`
+
+### 起因
+
+- 上游 `4771ebb77`（2026-11-17，restore enterprise team mode on develop）恢复了企业版的 Team 模式：企业版新对话可选 Agent 或 Team，所有版本在对话已有消息或运行中时锁定模式选择器。此前企业版固定为单 Agent，本特性旧分支的锁定条件带有 `enterprise ||`，只是沿用当时的上游规则，并非本特性新增。
+- 分支变基到上游 `9d18e0722` 后，`InputArea.tsx` 的锁定条件为 `isProcessing || modeSwitchPending || (hasHistory && !inPlaceModeSwitchAllowed)`。原地切换仍只在个人版 WebSocket 下开放（`allowsInPlaceModeSwitch`），所以企业版的表现与上游一致：新对话可选模式，已有消息后锁定。
+- 核对发现企业版的限制只在 Web 前端：服务端 `mode.set` 不判断版本，企业版客户端直接发送 `mode.set` 会被执行。
+
+### 决定与实现（用户确认，2026-11-20）
+
+- 企业版继续沿用上游规则，不恢复 `enterprise ||`（否则会在本特性里撤销上游恢复的企业版 Team 模式）；企业版原地切换不在本次范围，企业团队有配额与独立控制面，需要另行设计。
+- `AgentRuntime.switch_session_mode` 在企业版（`jiuwenswarm.enterprise.edition.is_enterprise()`）直接拒绝，错误码 `BAD_REQUEST`，消息 `enterprise edition sessions cannot switch mode`，不读写会话元数据，也不写 `session.mode_changed`。目标模式与当前模式相同时同样拒绝。`mode.get` 不受影响。
+- 中英文模式说明原句“企业版……选择其他模式仍会新建对话”与实际不符，改为：企业版在对话开始时选定模式，已有消息后选择器锁定，服务端拒绝 `mode.set`。
+- 上游用例 `enterprise composer keeps only upload, skills and plan, with single Agent locked` 仍按旧的单 Agent 行为断言，在上游 `9d18e0722` 上同样失败；属于上游遗留，本特性不修改。
+
+### 实际执行与证据
+
+| 执行日期 / 验证范围 | 实现版本与环境 | 命令 | 实际结果 | 未覆盖项 |
+| --- | --- | --- | --- | --- |
+| 2026-11-21 变更前 | 分支提交 `430529c8d` 加新用例，Linux / Python 3.12，仓库 `.venv` | `pytest tests/unit_tests/runtime/test_session_mode_switch.py -k enterprise` | 4 例失败（Web/TUI × 默认/项目会话） | — |
+| 2026-11-21 变更后 | 同上，含本次改动 | `pytest tests/unit_tests/runtime/test_session_mode_switch.py tests/unit_tests/runtime/test_session_mode_route.py` | 338 例全部通过 | 未在真实企业版部署中联调 |
+
+### 兼容
+
+个人版行为不变。企业版此前前端从不发送 `mode.set`，因此正常使用不受影响；直接调用 `mode.set` 的企业版客户端现在收到 `BAD_REQUEST`。
+
 ## 已知遗留
 
 ### 2026-11-17 04:17（Asia/Singapore）：空闲 Team 监听导致误报忙碌
