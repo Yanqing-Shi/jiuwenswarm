@@ -224,6 +224,28 @@ def test_mode_get_reads_persisted_mode_and_checks_user(mode_session, session_cha
     assert denied.value.code == "NOT_FOUND"
 
 
+def test_mode_set_is_refused_in_the_enterprise_edition(mode_session, session_channel, monkeypatch):
+    """The enterprise edition fixes a conversation's mode on the server too; mode.get keeps answering."""
+    markers = []
+    monkeypatch.setattr(session_history, "append_session_mode_changed", lambda **item: markers.append(item))
+    runtime = AgentRuntime(agent_manager=AsyncMock(), initializer=AsyncMock())
+    monkeypatch.setenv("JIUWENSWARM_EDITION", "enterprise")
+    for target in ("team.code.normal", "agent.code.normal"):
+        with pytest.raises(SessionModeSwitchError) as refused:
+            _switch(runtime, session_channel, target, "agent.code.normal")
+        assert refused.value.code == "BAD_REQUEST"
+        assert "enterprise" in str(refused.value)
+    assert _get_mode(session_channel)["mode"] == "agent.code.normal"
+    assert markers == []
+    assert "mode_revision" not in session_metadata.get_session_metadata(
+        "one-session", cache_bust=True, enable_writeback=False,
+    )
+
+    monkeypatch.setenv("JIUWENSWARM_EDITION", "personal")
+    assert _switch(runtime, session_channel, "team.code.normal", "agent.code.normal")["changed"] is True
+    assert len(markers) == 1
+
+
 @pytest.mark.parametrize("mode_fields", [
     {}, {"mode": None}, {"mode": "unknown"}, {"mode": ""},
     {"mode": "future.mode"}, {"mode": 1}, {"mode": []}, {"mode": {}},
