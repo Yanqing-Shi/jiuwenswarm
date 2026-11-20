@@ -191,6 +191,28 @@ async def _recorded_turn(runtime, request):
     return output
 
 
+def _use_storage(monkeypatch, storage):
+    """Run a Runtime-created Session on the snapshot path or on its shared conversation record."""
+    if storage == "snapshot":
+        from jiuwenswarm.runtime.session import conversation
+
+        monkeypatch.setattr(conversation, "initialize_main_conversation", AsyncMock(return_value=None))
+
+
+async def _window_at_commit(stored, state):
+    """The durable window this commit goes with: its snapshot, or the shared record."""
+    reference = state.get(snapshots.SNAPSHOT_KEY)
+    if reference is not None:
+        return snapshots.load_checkpoint_snapshot(stored.sid, reference)
+    from jiuwenswarm.runtime.session.conversation import main_binding
+
+    binding = main_binding(stored.sid)
+    record = await binding.store.read(binding.key)
+    # A shared record has no replay boundary: it is restored exactly as stored.
+    return SimpleNamespace(contexts={"default_context_id": {"messages": list(record.messages)}},
+                           covered_requests=None, cursor=SimpleNamespace(offset=None))
+
+
 def _observe_native_interrupt(monkeypatch, stored, pending_ids, result_id):
     """Capture actual native storage commits, without adding a repair commit."""
     delegate = CheckpointerFactory._default_checkpointer.delegate
@@ -202,8 +224,7 @@ def _observe_native_interrupt(monkeypatch, stored, pending_ids, result_id):
             state = session.state().get_global()
             pending = state.get(INTERRUPTION_KEY)
             if pending and set(pending.interrupted_tools) == pending_ids:
-                reference = state[snapshots.SNAPSHOT_KEY]
-                saved = snapshots.load_checkpoint_snapshot(stored.sid, reference)
+                saved = await _window_at_commit(stored, state)
                 messages = saved.contexts["default_context_id"]["messages"]
                 if any(getattr(message, "tool_call_id", None) == result_id for message in messages):
                     snapshots_at_commit.append(saved)
@@ -257,9 +278,11 @@ def _first_answer(old, stored, card, mode):
 
 @pytest.mark.parametrize("mode", ["manual", "auto"])
 @pytest.mark.parametrize("history_order", ["before_snapshot", "after_snapshot"])
+@pytest.mark.parametrize("storage", ["snapshot", "shared"])
 async def test_two_tool_batches_keep_consumption_through_real_runtime_and_restart(
-    hosts, stored, snapshot_checkpoint, monkeypatch, mode, history_order,
+    hosts, stored, snapshot_checkpoint, monkeypatch, mode, history_order, storage,
 ):
+    _use_storage(monkeypatch, storage)
     old, runtime, card = await _two_batch_first_card(hosts, stored, monkeypatch, mode)
     native_ready, committed = _observe_native_interrupt(monkeypatch, stored, {"unanswered-read"}, "written-once")
     result_written = asyncio.Event()
@@ -288,17 +311,23 @@ async def test_two_tool_batches_keep_consumption_through_real_runtime_and_restar
     assert any(event.event_type == "chat.ask_user_question" for event in second)
     assert not any(event.event_type == "chat.error" for event in second)
     assert old.executions == [{"value": "FIRST_ONCE"}] and len(old.script.calls) == 2
-    assert committed and "first-answer" in committed[0].covered_requests
+    assert committed
     instance = old.adapter._instance
     pending = instance.loop_session.get_state(INTERRUPTION_KEY)
     assert [call.id for call in pending.ai_message.tool_calls] == ["unanswered-read"]
     reference = instance.loop_session.get_state(snapshots.SNAPSHOT_KEY)
-    raw = json.loads(
-        (snapshots.snapshot_directory(stored.sid) / reference["file"]).read_text(
-            encoding="utf-8"
+    if storage == "snapshot":
+        assert "first-answer" in committed[0].covered_requests
+        raw = json.loads(
+            (snapshots.snapshot_directory(stored.sid) / reference["file"]).read_text(
+                encoding="utf-8"
+            )
         )
-    )
-    assert raw["source"]["offset"] > 0 or "original-query" in raw["covered_requests"]
+        assert raw["source"]["offset"] > 0 or "original-query" in raw["covered_requests"]
+    else:
+        # The shared record is the window's only durable copy.
+        assert reference is None and not instance.loop_session.get_state("context")
+        assert not list(snapshots.snapshot_directory(stored.sid).glob("*.json"))
     await old.adapter._isolate_permission_instance()
     await snapshot_checkpoint()
 
@@ -334,11 +363,10 @@ async def test_two_tool_batches_keep_consumption_through_real_runtime_and_restar
 
 async def test_legacy_bad_boundary_is_not_silently_healed(hosts, stored, snapshot_checkpoint, monkeypatch):
     from jiuwenswarm.server.runtime.agent_adapter.session_input import SessionInputGuard
-    from jiuwenswarm.runtime.session import conversation
 
     # A shared conversation record restores the exact window and has no snapshot
     # boundary to validate. This case covers a Session on the snapshot path.
-    monkeypatch.setattr(conversation, "initialize_main_conversation", AsyncMock(return_value=None))
+    _use_storage(monkeypatch, "snapshot")
     # Generate a minimal legacy fixture through Core, without the new producers.
     with monkeypatch.context() as legacy:
         legacy.setattr(SessionInputGuard, "_record_consumed_inputs", lambda *_args: None)
@@ -361,9 +389,11 @@ async def test_legacy_bad_boundary_is_not_silently_healed(hosts, stored, snapsho
 
 @pytest.mark.parametrize("mode", ["manual", "auto"])
 @pytest.mark.parametrize("outcome", ["allow_once", "reject", "tool_error"])
+@pytest.mark.parametrize("storage", ["snapshot", "shared"])
 async def test_partial_resume_first_native_commit_covers_its_actual_result(
-    hosts, stored, snapshot_checkpoint, monkeypatch, mode, outcome,
+    hosts, stored, snapshot_checkpoint, monkeypatch, mode, outcome, storage,
 ):
+    _use_storage(monkeypatch, storage)
     old = await hosts("partial", stored.sid, mode=mode)
     await old.create()
     await old.adapter.start_interaction(stored.sid)
@@ -421,7 +451,7 @@ async def test_partial_resume_first_native_commit_covers_its_actual_result(
     assert results[0].metadata["jiuwenswarm_request_ids"] == ["partial-answer"]
     if outcome == "allow_once":
         assert results[0].content == "rewritten actual result" and results[0].metadata["earlier_rail"]
-    assert "partial-answer" in saved.covered_requests
+    assert storage == "shared" or "partial-answer" in saved.covered_requests
     assert not [message for message in messages if getattr(message, "tool_call_id", None) == "snapshot_call_1"]
     assert len(old.executions) == (0 if outcome == "reject" else 1)
 
