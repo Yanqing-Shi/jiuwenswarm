@@ -25,7 +25,7 @@ A conversation that already has messages can switch between Agent and Team mode 
 - It is refused while the conversation is still running (stop it first), and for conversations bound to an agent group, an external agent, or a scheduled task.
 - After a Team turn finishes, keeping the conversation open to receive events does not prevent a mode switch.
 - A committed switch increments `mode_revision` in the Session's `metadata.json` and appends a `session.mode_changed` record to `history.jsonl`.
-- It applies to the personal edition over WebSocket. In the enterprise edition, and when leaving Auto Harness, choosing another mode still starts a new conversation.
+- It applies to the personal edition over WebSocket. The enterprise edition chooses the mode when a conversation starts: once the conversation has messages the mode selector is locked, and the server refuses `mode.set`. Leaving Auto Harness still starts a new conversation.
 
 ---
 
