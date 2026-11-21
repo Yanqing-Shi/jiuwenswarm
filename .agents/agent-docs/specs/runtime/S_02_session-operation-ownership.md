@@ -48,4 +48,11 @@ files:
 - 实际 Leader 新取得所有权时的复核（`session_mode_guard`）目前只核对 mode。
 - 共享对话记录不随删除清理：`checkpointer.release` 只清理执行者 checkpoint，删除 Session 后其主记录和成员窗口记录仍留在存储中。归档/恢复不触碰该记录。
 
+## 预留：宿主决定式压缩
+
+Core 的宿主决定式压缩（`ContextEngine.compact_context`，Swarm 侧为 `extensions_v2/session_compaction`）目前只有接口，
+`CompactionService.bind` 尚未接到在线 Session。它在被接受时改写共享主记录（Core 侧契约见 core 的
+`S_02_session-conversation-store` 第 5 节），因此接入时属于“改写共享主记录的宿主操作”：与上文第 8 条相同，
+须在 `shared_session_operation(session_id)` 内进行，锁忙返回忙碌而不是排队。precompute 不写记录，无需取锁。目前未实现。
+
 依据：[设计草稿 I-00](../../designs/proposals/D-20261112-0530-session-conversation-window/design.md)、[实施记录](../../features/F_20261112_0650_session-operation-ownership.md)。
