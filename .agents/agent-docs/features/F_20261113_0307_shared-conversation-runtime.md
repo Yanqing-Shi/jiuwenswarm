@@ -163,3 +163,35 @@ Swarm 运行时代码不直接调用它。
 2 项失败是 `test_shared_conversation_runtime.py` 中依赖执行顺序的 team 用例（单独运行该文件 51 passed，改动前同样失败，原因未定位）。
 
 **未覆盖**：真实模型下的长会话；视频双工扩展（`video_duplex`）与共享 Session 并用时对 `SNAPSHOT_KEY` 的处理未核对。
+
+## 2026-11-21 06:43（Asia/Singapore）：应用角色（NPC）会话与共享记录
+
+用户确认后实施（开发会话，2026-11-20）。
+
+**核对结论**：上游的应用角色有三种创建时固定的形态。单角色、以及主角色通过 `ask_<name>` 咨询各自独立成员 Session 的形态，
+由 `AppRoleAdapter` 处理：不组装 DeepAgent，每次请求按 `history.jsonl` 重建模型输入，没有上下文窗口。
+以 Team 模式创建的形态（`is_app_role_team`）运行在原生 Team 运行时上，没有独立的成员 Session，成员是进程内的预定义成员。
+在真实的会话创建入口上探测到：改动前，单角色和咨询形态的主角色也会得到一条从不使用的空共享记录并被标记为共享
+（成员 Session 没有记录）；Team 形态的主角色得到主记录。
+
+**改动**：`initialize_main_conversation` 对“应用角色且不在原生 Team 运行时上”的 Session 返回 None，不建记录、不打共享标记；
+Team 形态不变。已带有空记录的既有应用角色 Session 不迁移，该记录与标记对它们没有作用（回退时多取一次会话操作锁）。
+应用角色会话的模式切换由 Web 模式切换特性拒绝（见 F_20261116_1710 同日记录）。
+
+**测试**：
+
+- `test_application_role_gets_a_main_record_only_in_its_native_team_form`（改动前失败）：单角色、咨询形态的主角色与成员不建记录，Team 形态建记录。
+- `test_native_npc_team_keeps_the_lead_on_the_main_record_and_each_member_on_its_own`：以真实的 `build_app_role_team_spec`
+  与 Team 运行入口（`_consume_stream_with_query` 加 `prepare_shared_leader`）跑一轮玩家输入：主角色用 `create_task` 给成员派一个发言任务，
+  两者各自发言。断言两条 `chat.final` 都送达；主记录含玩家输入与主角色发言、不含成员发言；成员的私有窗口
+  （`binding.child(kind="team_member", identity=[team, member])`）含任务内容与成员发言、不含主角色发言；模式保持 Team。
+  该用例刻画既有行为，改动前同样通过。
+
+**测试隔离的发现**：Team 运行时的 home 与团队数据库是进程级状态。`build_app_role_team_spec` 所在模块首次导入时会把 Team home
+指回默认数据目录，覆盖夹具的设置；探索阶段因此把一个测试团队写进了本机默认的 `~/.jiuwenswarm`（已清除，仅限当次创建的文件）。
+该用例在导入之后重新固定 Team home，并为每次运行使用独立的 Session、团队名和团队数据库（`StorageSpec`），
+因为同一进程里前一次运行的团队运行时不会随用例结束而消失。本文件中另两个只在整目录运行时失败的 Team 用例尚未按此核对。
+
+验证（Linux / Python 3.12，仓库 `.venv`，本地 core，进程环境变量 `JIUWENSWARM_DATA_DIR` / `OPENJIUWEN_HOME` 指向临时目录）：
+本文件 **55 passed**；上一节的范围加 `test_app_role_adapter.py`、`test_app_role_npc_team.py`、`test_team_helpers.py`、
+`test_session_ops_fork.py` 共 **3938 passed, 2 failed**，2 项失败仍是前述依赖执行顺序的 Team 用例。

@@ -93,6 +93,38 @@ async def test_main_record_is_created_only_for_a_session_without_earlier_convers
     assert await load_main_binding("has-checkpoint") is None
 
 
+_NPC_ROSTER = {"members": [{"name": "fisherman", "role_instructions": "You are the old fisherman.",
+                           "title": "Fisherman", "desc": "knows the sea"}]}
+
+
+@pytest.mark.asyncio
+async def test_application_role_gets_a_main_record_only_in_its_native_team_form(shared_runtime):
+    """A text-only role rebuilds its input from history and has no window; only its Team form stores one."""
+    cases = {
+        "single-role": ({}, "agent.work.normal", False),
+        "consulting-lead": ({"npc_team": _NPC_ROSTER, "npc_member_sessions": {"fisherman": "consulted-member"}},
+                            "agent.work.normal", False),
+        "consulted-member": ({"npc_member": {"leader_session_id": "consulting-lead", "name": "fisherman"}},
+                             "agent.work.normal", False),
+        "team-lead": ({"npc_team": _NPC_ROSTER}, "team.work.normal", True),
+    }
+    try:
+        for sid, (fields, mode, shared) in cases.items():
+            session_metadata.init_session_metadata(
+                session_id=sid, channel_id="web", user_id="user", mode=mode, work_mode="work",
+                execution_profile="app_role", role_instructions="You are the village chief.", **fields,
+            )
+            binding = await initialize_main_conversation(sid, mode=mode)
+            assert (binding is not None) is shared, sid
+            assert (await load_main_binding(sid) is not None) is shared, sid
+            stored = session_metadata.get_session_metadata(sid, cache_bust=True, enable_writeback=False)
+            assert stored.get("context_storage") == ("shared" if shared else None), sid
+    finally:
+        session_metadata._METADATA_QUEUE.join()
+        for sid in cases:
+            session_metadata.remove_session_metadata_cache(sid)
+
+
 @pytest.mark.asyncio
 async def test_deep_adapter_binds_before_restore_and_reads_the_shared_record(shared_runtime, monkeypatch):
     from jiuwenswarm.agents.harness.common.session_ops_service import warmup_session_context
@@ -216,6 +248,119 @@ async def test_team_producer_binds_the_actual_leader_to_the_existing_main_window
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_native_npc_team_keeps_the_lead_on_the_main_record_and_each_member_on_its_own(
+    shared_runtime, monkeypatch, request,
+):
+    """An application role on the native Team runtime: the lead speaks from the Session's main record,
+    a consulted member from its private window, and both speeches reach the player."""
+    import json
+
+    from openjiuwen.agent_teams import paths
+    from openjiuwen.agent_teams.harness import bind_leader_preparation
+    from openjiuwen.agent_teams.schema.blueprint import LeaderSpec, StorageSpec, TeamAgentSpec
+    from openjiuwen.core.foundation.llm import ToolCall
+    from openjiuwen.harness.schema.deep_agent_spec import DeepAgentSpec, TeamModelConfig
+    from jiuwenswarm.agents.swarm.assembly import build_app_role_team_spec
+    from jiuwenswarm.runtime.app_role import is_app_role_team
+    from jiuwenswarm.runtime.session.conversation import prepare_shared_leader
+    from jiuwenswarm.server.runtime.agent_adapter import team_helpers
+
+    env = shared_runtime
+    # The imports above may point the Team home at the default data folder; keep this run in the test's own.
+    monkeypatch.setattr(paths, "_configured_openjiuwen_home", env.root / "core")
+    # Team runtimes outlive a test in this process, so each run gets its own Session, team and team database.
+    suffix = request.node.callspec.id.replace("_", "-")
+    sid, team_name = f"npc-team-{suffix}", f"npc-village-{suffix}"
+    session_metadata.init_session_metadata(
+        session_id=sid, channel_id="web", user_id="user", mode="team.work.normal", work_mode="work",
+        title="Village Office", execution_profile="app_role", role_instructions="You are the village chief.",
+        npc_team=_NPC_ROSTER,
+    )
+    metadata = session_metadata.get_session_metadata(sid, cache_bust=True, enable_writeback=False)
+    assert is_app_role_team(metadata) and "npc_member_sessions" not in metadata
+    binding = await initialize_main_conversation(sid, mode="team.work.normal")
+    assert binding is not None
+
+    events = []
+    spoken = {"team_leader": asyncio.Event(), "fisherman": asyncio.Event()}
+
+    def reply(messages, kwargs):
+        tools = [getattr(tool, "name", None) for tool in kwargs.get("tools") or []]
+        if "create_task" not in tools:
+            return "Fisherman: the east pier at dawn.", None
+        if not any(message.role == "tool" for message in messages):
+            return "", [ToolCall(id="assign-fisherman", type="function", name="create_task", arguments=json.dumps({
+                "tasks": [{"title": "Answer the player", "content": "Tell the player where to fish.",
+                           "assignee": "fisherman"}],
+            }))]
+        return "Chief: our fisherman knows best.", None
+
+    async def invoke(self, messages, **kwargs):
+        content, tool_calls = reply(messages, kwargs)
+        return AssistantMessage(content=content, tool_calls=tool_calls)
+
+    async def stream(self, messages, **kwargs):
+        content, tool_calls = reply(messages, kwargs)
+        yield AssistantMessageChunk(content=content, tool_calls=tool_calls)
+
+    async def broadcast(_channel, _sid, event):
+        events.append(event)
+        if event.get("event_type") == "chat.final" and event.get("member_name") in spoken:
+            spoken[event["member_name"]].set()
+        return 1
+
+    monkeypatch.setattr(Model, "invoke", invoke)
+    monkeypatch.setattr(Model, "stream", stream)
+    monkeypatch.setattr(team_helpers, "_broadcast_event", broadcast)
+    config = TeamModelConfig(model_client_config=ModelClientConfig(client_provider="OpenAI", api_key="test",
+                                                                  api_base="https://model.invalid"),
+                             model_request_config=ModelRequestConfig(model_name="npc-model"))
+    spec = build_app_role_team_spec(
+        TeamAgentSpec(
+            team_name=team_name, spawn_mode="inprocess", evolution_enabled=False,
+            leader=LeaderSpec(member_name="leader", display_name="Chief"),
+            agents={"leader": DeepAgentSpec(model=config, enable_security_rail=False, enable_sys_operation=False,
+                                            enable_read_image_multimodal=False)},
+            storage=StorageSpec(type="sqlite", params={"connection_string": str(env.root / "team.sqlite")}),
+        ),
+        metadata,
+    )
+    assert str(env.root) in spec.agents["fisherman"].workspace.root_path
+    member_window = binding.child(kind="team_member", identity=json.dumps([team_name, "fisherman"], ensure_ascii=False))
+    with bind_leader_preparation(prepare_shared_leader):
+        task = asyncio.create_task(team_helpers._consume_stream_with_query(
+            "web", sid, spec, "Where can I fish?", round_id=1, round_request_id="turn-1",
+        ))
+    try:
+        await asyncio.wait_for(asyncio.gather(*(event.wait() for event in spoken.values())), 30)
+        assert not [event for event in events if event.get("event_type") == "chat.error"], events
+        finals = {event["member_name"]: event for event in events if event.get("event_type") == "chat.final"}
+        assert finals["team_leader"]["content"] == "Chief: our fisherman knows best."
+        assert finals["fisherman"]["content"] == "Fisherman: the east pier at dawn."
+        assert finals["fisherman"]["display_name"] == "Fisherman"
+
+        async def window_with(window, text):
+            for _ in range(100):
+                saved = repr((await window.store.read(window.key)).messages)
+                if text in saved:
+                    return saved
+                await asyncio.sleep(0.05)
+            raise AssertionError(f"{text!r} never reached {window.key}: {saved}")
+
+        main = await window_with(binding, "Chief: our fisherman knows best.")
+        private = await window_with(member_window, "Fisherman: the east pier at dawn.")
+        assert "Where can I fish?" in main and "Tell the player where to fish." in private
+        assert "Fisherman: the east pier at dawn." not in main and "Chief: our fisherman knows best." not in private
+        assert session_metadata.get_session_metadata(sid, cache_bust=True, enable_writeback=False)["mode"] == "team.work.normal"
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        session_metadata._METADATA_QUEUE.join()
+        session_metadata.remove_session_metadata_cache(sid)
 
 
 @pytest.mark.asyncio

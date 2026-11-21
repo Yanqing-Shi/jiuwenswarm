@@ -516,14 +516,20 @@ def test_mode_switch_rejects_a_session_owned_by_another_channel(mode_session, se
     assert markers == []
 
 
+_NPC_ROSTER = {"members": [{"name": "fisherman", "role_instructions": "You are the fisherman.", "title": "", "desc": "fish"}]}
+
+
 @pytest.mark.parametrize("bound_fields", [
     {"agent_group_name": "research-experts"},
     {"team_group_identity": {"name": "research-experts"}},
     {"session_runtime_binding": {"agent": "claude"}},
     {"cron_id": "daily-report"},
+    {"execution_profile": "app_role", "role_instructions": "You are the village chief."},
+    {"execution_profile": "app_role", "role_instructions": "You are the village chief.",
+     "npc_team": _NPC_ROSTER, "npc_member_sessions": {"fisherman": "member-session"}},
 ])
 def test_mode_set_rejects_sessions_with_a_bound_executor(mode_session, session_channel, monkeypatch, bound_fields):
-    """Agent groups, external agents and scheduled tasks keep their executor for life."""
+    """Agent groups, external agents, scheduled tasks and application roles keep their executor for life."""
     markers = []
     monkeypatch.setattr(session_history, "append_session_mode_changed", lambda **item: markers.append(item))
     metadata_path = session_metadata.get_agent_sessions_dir() / "one-session" / "metadata.json"
@@ -539,6 +545,29 @@ def test_mode_set_rejects_sessions_with_a_bound_executor(mode_session, session_c
     assert markers == []
     # Reading the route stays available so a client can show why it is fixed.
     assert _get_mode(session_channel)["mode"] == "agent.code.normal"
+
+
+def test_mode_set_cannot_move_a_native_npc_team_out_of_team_mode(mode_session, session_channel, monkeypatch):
+    """An application role on the native Team runtime keeps the Team mode it was created with."""
+    from jiuwenswarm.runtime.app_role import is_app_role_team
+
+    markers = []
+    monkeypatch.setattr(session_history, "append_session_mode_changed", lambda **item: markers.append(item))
+    metadata_path = session_metadata.get_agent_sessions_dir() / "one-session" / "metadata.json"
+    stored = json.loads(metadata_path.read_text(encoding="utf-8"))
+    stored.update({"execution_profile": "app_role", "role_instructions": "You are the village chief.",
+                   "npc_team": _NPC_ROSTER, "mode": "team.code.normal"})
+    metadata_path.write_text(json.dumps(stored), encoding="utf-8")
+    assert is_app_role_team(stored)
+    runtime = AgentRuntime(agent_manager=AsyncMock(), initializer=AsyncMock())
+
+    with pytest.raises(SessionModeSwitchError) as rejected:
+        _switch(runtime, session_channel, "agent.code.normal", "team.code.normal")
+    assert rejected.value.code == "BAD_REQUEST"
+    assert "application role" in str(rejected.value)
+    assert json.loads(metadata_path.read_text(encoding="utf-8")) == stored
+    assert markers == []
+    assert _get_mode(session_channel)["mode"] == "team.code.normal"
 
 
 @pytest.mark.asyncio
