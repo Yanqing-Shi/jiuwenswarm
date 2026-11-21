@@ -226,6 +226,36 @@ Gateway MR !173 的检视继续指出两点：未记录归属者（`user_id` 为
 
 个人版行为不变。企业版此前前端从不发送 `mode.set`，因此正常使用不受影响；直接调用 `mode.set` 的企业版客户端现在收到 `BAD_REQUEST`。
 
+## 2026-11-21 06:17（Asia/Singapore）续写：应用角色（NPC）会话拒绝 `mode.set`
+
+### 起因
+
+- 上游的应用角色（`execution_profile == "app_role"`，见 `runtime/app_role.py`）在创建时固定形态：单角色；主角色通过
+  `ask_<name>` 工具咨询各自独立的成员 Session（非 Team 模式，`AppRoleAdapter`，不组装 DeepAgent）；或以 Team 模式运行在原生
+  Team 运行时上的固定名册（`is_app_role_team`）。名册与 NPC Team 的模式均为创建时固定字段，元数据写入路径也会保留既有模式。
+- `session_mode_switch_blocker` 不识别应用角色，`mode.set` 因此会受理这些会话。在真实入口上探测到的结果：
+  咨询形态的主角色 Agent → Team 被受理，`is_app_role_team` 随之变为真，会话无声地改为原生 Team 形态，原成员 Session 成为孤儿；
+  Team 形态的主角色 Team → Agent 返回成功，但模式被上游的写入保护保持为 Team，客户端得到与事实不符的应答；
+  单角色 Agent → Team 被受理，存储的模式变为 Team，而它仍是单角色。
+
+### 决定与实现（用户确认，2026-11-20）
+
+- 应用角色会话与智能体组、外部智能体、定时任务会话同样视为“执行者在会话生命周期内固定”：`session_mode_switch_blocker`
+  对 `execution_profile == "app_role"` 返回 `application role sessions cannot switch mode`，`mode.set` 以 `BAD_REQUEST` 拒绝，
+  不改写元数据、不写 `session.mode_changed`。`mode.get` 不受影响。
+- 中英文模式说明的拒绝条件补充应用角色（NPC）对话。
+
+### 实际执行与证据
+
+| 执行日期 / 验证范围 | 实现版本与环境 | 命令 | 实际结果 | 未覆盖项 |
+| --- | --- | --- | --- | --- |
+| 2026-11-21 变更前 | 分支提交 `56fe029a7` 加新用例，Linux / Python 3.12，仓库 `.venv` | `pytest tests/unit_tests/runtime/test_session_mode_switch.py -k "bound_executor or native_npc_team"` | 12 例失败（单角色、咨询形态主角色、Team 形态主角色 × Web/TUI × 默认/项目会话） | — |
+| 2026-11-21 变更后 | 同上，含本次改动 | `pytest tests/unit_tests/runtime/test_session_mode_switch.py` | 269 例全部通过 | Web 前端未隐藏应用角色会话的模式选择器，仍由服务端拒绝 |
+
+### 兼容
+
+应用角色会话此前可被 `mode.set` 改写模式（见起因），现在收到 `BAD_REQUEST`；其余会话行为不变。
+
 ## 已知遗留
 
 ### 2026-11-17 04:17（Asia/Singapore）：空闲 Team 监听导致误报忙碌
