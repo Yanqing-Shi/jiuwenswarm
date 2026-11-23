@@ -1938,6 +1938,7 @@ class AgentRuntime:
         admission_started = False
         events: list[RuntimeEvent] = []
         agent: Any = None
+        plan_state_ready = False
         execution_error: Exception | None = None
         cancellation: asyncio.CancelledError | None = None
         readonly_goal_get = self._is_readonly_goal_get_request(request)
@@ -1985,6 +1986,7 @@ class AgentRuntime:
                         sub_mode,
                         agent,
                     )
+                    plan_state_ready = True
                     await self._emit_control_events(
                         request,
                         plan_result.events,
@@ -2026,7 +2028,7 @@ class AgentRuntime:
             admission_error: BaseException | None = None
             end_error: BaseException | None = None
             try:
-                if agent is not None and not stateless and not readonly_goal_get:
+                if plan_state_ready:
                     await self._emit_control_events(
                         request,
                         await self._plan_controller.check_post_process_exit(
@@ -2668,6 +2670,7 @@ class AgentRuntime:
         error: Exception | None = None
         cancellation: asyncio.CancelledError | None = None
         generator_exit: GeneratorExit | None = None
+        plan_state_ready = False
         supersede_attempted = False
         mailbox_turn = background and isinstance(
             (request.params or {}).get(SESSION_MESSAGE_INTERNAL_KEY), dict
@@ -2722,6 +2725,7 @@ class AgentRuntime:
                         sub_mode,
                         agent,
                     )
+                    plan_state_ready = True
                     control_events = self._control_events(request, plan_result.events)
                     if on_control_event is not None:
                         for event in control_events:
@@ -2809,11 +2813,8 @@ class AgentRuntime:
             plan_error: BaseException | None = None
             admission_error: BaseException | None = None
             end_error: BaseException | None = None
-            should_check_plan_exit = (
-                agent is not None and not stateless and not readonly_goal_get
-            )
             try:
-                if should_check_plan_exit:
+                if plan_state_ready:
                     control_events = self._control_events(
                         request,
                         await self._plan_controller.check_post_process_exit(
@@ -3474,15 +3475,7 @@ class AgentRuntime:
                 return f"admission.{name}"
         snapshot = self._session_coordinator.snapshot_session(session_id)
         for execution in snapshot.executions if snapshot else ():
-            if execution.state in {
-                SessionExecutionState.QUEUED,
-                SessionExecutionState.RUNNING,
-                SessionExecutionState.WAITING_FOR_CONTROL,
-            } or (
-                execution.state is SessionExecutionState.WAITING_FOR_INPUT
-                and not (execution.team and execution.team.observation_only)
-                and not self.has_parked_team_streams(session_id)
-            ):
+            if self._execution_blocks_mode_switch(session_id, execution):
                 return (
                     f"execution request={execution.request_id} kind={execution.work_kind.value} "
                     f"state={execution.state.value}"
@@ -3490,6 +3483,23 @@ class AgentRuntime:
         if self.is_session_running(session_id):
             return "team_session_running"
         return None
+
+    def _execution_blocks_mode_switch(
+        self, session_id: str, execution: SessionExecutionSnapshot,
+    ) -> bool:
+        """Whether one coordinator execution still owns work that mode.set must not interrupt."""
+        if execution.state in {
+            SessionExecutionState.QUEUED,
+            SessionExecutionState.RUNNING,
+            SessionExecutionState.WAITING_FOR_CONTROL,
+        }:
+            return True
+        if execution.state is not SessionExecutionState.WAITING_FOR_INPUT:
+            return False
+        # A Team observer, or a request parked on a released Team round, owns no turn.
+        if execution.team and execution.team.observation_only:
+            return False
+        return not self.has_parked_team_streams(session_id)
 
     def is_session_running(
         self, session_id: str, *, ignore_heartbeats: bool = False
@@ -4025,7 +4035,7 @@ class AgentRuntime:
 
     @classmethod
     def _validate_answer_source(cls, request: AgentRequest) -> None:
-        """Reject answers carried under an unknown source (#6285).
+        """Reject answers lane admission would not resume (#6285, #6857).
 
         Runs before session lane admission; the raised
         ``InteractionAnswerError`` reaches the client as an error response

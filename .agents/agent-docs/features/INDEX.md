@@ -51,10 +51,10 @@ generated: true
 | [jiuwenswarm/server/jiuwenmate](#module-jiuwenswarm-server-jiuwenmate) |
 | [jiuwenswarm/server/runtime](#module-jiuwenswarm-server-runtime) |
 | [jiuwenswarm/server/runtime/agent_adapter](#module-jiuwenswarm-server-runtime-agent_adapter) |
+| [jiuwenswarm/server/runtime/marketplace](#module-jiuwenswarm-server-runtime-marketplace) |
 | [jiuwenswarm/server/runtime/session](#module-jiuwenswarm-server-runtime-session) |
 | [jiuwenswarm/server/runtime/skill](#module-jiuwenswarm-server-runtime-skill) |
 | [scripts](#module-scripts) |
-| [scripts/acceptance](#module-scripts-acceptance) |
 | [tests](#module-tests) |
 
 <a id="module-deploy-yuanrong"></a>
@@ -97,6 +97,7 @@ generated: true
 |---|---|---|---|---|
 | [F_20261027_1843_ttse-plugin-rail](F_20261027_1843_ttse-plugin-rail.md) | F | TTSE 以插件 Rail 接入主 Coding Agent | xinyang_bali | 无独立 D：用户确认执行 D:/files/自演进/方案/ttse适配code agent 中的外部适配方案，该资料没有仓内 D 标识。 |
 | [F_20261111_1528_unified-observability-config](F_20261111_1528_unified-observability-config.md) | F | Team 与单 Agent 可观测性配置统一为 observability 段 | alan_cheng | 无独立 D：用户在会话中确认的配置收敛改动，无独立设计编号。 |
+| [F_20261117_2300_conflict-free-tool-registry](F_20261117_2300_conflict-free-tool-registry.md) | F | 内置工具声明式自发现注册表与文档索引无冲突合并机制 | zhuxiangju | 无独立 D：架构级消除多分支并行开发工具与文档时的中心注册表及索引冲突热点。 |
 
 <a id="module-jiuwenswarm-agents-harness-common"></a>
 
@@ -152,7 +153,7 @@ generated: true
 |---|---|---|---|---|
 | [F_20261104_1225_npc-team-member-sessions](F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](../designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
 | [F_20261111_1755_team-leader-goal](F_20261111_1755_team-leader-goal.md) | F | 调度模式领导目标驱动设置实施与验证 | alan_cheng | [D-20261111-1722-team-goal-config](../designs/active/D-20261111-1722-team-goal-config/design.md) |
-| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 与 TUI 共用会话模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
+| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 会话内模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次在服务端新增 mode.set / mode.get，只受理 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
 
 <a id="module-jiuwenswarm-agents-harness-team-rails"></a>
 
@@ -215,8 +216,9 @@ generated: true
 | [F_20261103_1124_sdk-web-retrieval](F_20261103_1124_sdk-web-retrieval.md) | F | 接入 SDK Web 质量控制与检索预算 | ShowHsiang | 无独立 D：用户在对话中确认实际搜索案例分析后的调整策略，无独立设计文档。 |
 | [F_20261103_1149_builtin-skill-catalog](builtin-skill-catalog.md) | F | 内置能力总目录实施记录 | kdgmpw | [D-20261103-1123-builtin-skill-catalog](../designs/active/D-20261103-1123-builtin-skill-catalog/design.md) |
 | [F_20261110_1438_opencode-go-provider](F_20261110_1438_opencode-go-provider.md) | F | 新增 opencode-go 模型供应商 | wang_njust_608 | 无独立 D：需求与方案由本地 Spec Kit 资产 specs/001-opencode-go-provider/ 承载（spec/plan/tasks，仅本地保留、不入库），未另建 .agents/agent-docs 下的 D 编号；上游供应商预设归 agent-gateway 仓。 |
-| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 与 TUI 共用会话模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
+| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 会话内模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次在服务端新增 mode.set / mode.get，只受理 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
 | [F_20261117_1752_colleague-swarmchat](F_20261117_1752_colleague-swarmchat.md) | F | AI 同事接入 SwarmChat 实施记录 | weichenhao | D-20261116-1201-colleague-swarmchat-membership（非本仓或待定位） |
+| [F_20261119_1039_app-hub](F_20261119_1039_app-hub.md) | F | Hub 应用分发与本地安装实施 | kdgmpw | 无独立 D：设计输入为仓库外部的《App Hub 应用资产方案设计》与《App Hub 双仓实施方案》，未在 .agents/agent-docs/designs 建立 D 记录。 |
 
 <a id="module-jiuwenswarm-channels-web-frontend-src-features-settings"></a>
 
@@ -246,7 +248,7 @@ generated: true
 | [F_20261110_2026_affinity-settings](F_20261110_2026_affinity-settings.md) | F | 实验功能算力亲和开关与自定义模型能力接入 | MengHan18 | 无独立 D：外部初始方案为 docs_HM_kvc/E前端开关打开/01 和 02；全局准入和交互按用户确认的 04 小白版文档替代，无仓库内 D 标识。 |
 | [F_20261111_1528_unified-observability-config](F_20261111_1528_unified-observability-config.md) | F | Team 与单 Agent 可观测性配置统一为 observability 段 | alan_cheng | 无独立 D：用户在会话中确认的配置收敛改动，无独立设计编号。 |
 | [F_20261111_1755_team-leader-goal](F_20261111_1755_team-leader-goal.md) | F | 调度模式领导目标驱动设置实施与验证 | alan_cheng | [D-20261111-1722-team-goal-config](../designs/active/D-20261111-1722-team-goal-config/design.md) |
-| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 与 TUI 共用会话模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
+| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 会话内模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次在服务端新增 mode.set / mode.get，只受理 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
 | [F_20261119_1624_beta3-extensions-develop-port](F_20261119_1624_beta3-extensions-develop-port.md) | F | beta3 扩展能力线性迁入 develop | lizhiyuan | 无独立 D：按用户明确确认的逐笔迁移、保留 develop 行为和 Gateway 跨仓边界执行；本次没有另立设计，原扩展契约沿用模块内规约。 |
 
 <a id="module-jiuwenswarm-common-config_panel"></a>
@@ -275,6 +277,7 @@ generated: true
 |---|---|---|---|---|
 | [F_20261103_1106_app-market-containers-and-editing](app-market-implementation.md) | F | 应用市场浏览器容器与编辑会话 | default | 无独立 D：用户明确授权初步本地实现，无独立设计文档。 |
 | [F_20261103_1501_app-role-session](app-role-session.md) | F | 保留基础系统提示的轻量 NPC 会话 | kdgmpw | [D-20261103-1444-app-role-session](../designs/active/D-20261103-1444-app-role-session/design.md) |
+| [F_20261119_1039_app-hub](F_20261119_1039_app-hub.md) | F | Hub 应用分发与本地安装实施 | kdgmpw | 无独立 D：设计输入为仓库外部的《App Hub 应用资产方案设计》与《App Hub 双仓实施方案》，未在 .agents/agent-docs/designs 建立 D 记录。 |
 
 <a id="module-jiuwenswarm-extensions-sdk"></a>
 
@@ -342,7 +345,7 @@ generated: true
 |---|---|---|---|---|
 | [F_20261103_1501_app-role-session](app-role-session.md) | F | 保留基础系统提示的轻量 NPC 会话 | kdgmpw | [D-20261103-1444-app-role-session](../designs/active/D-20261103-1444-app-role-session/design.md) |
 | [F_20261104_1225_npc-team-member-sessions](F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](../designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
-| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 与 TUI 共用会话模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
+| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 会话内模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次在服务端新增 mode.set / mode.get，只受理 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
 
 <a id="module-jiuwenswarm-server"></a>
 
@@ -351,7 +354,7 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
 | [F_20261104_1225_npc-team-member-sessions](F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](../designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
-| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 与 TUI 共用会话模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
+| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 会话内模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次在服务端新增 mode.set / mode.get，只受理 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
 | [F_20261119_1624_beta3-extensions-develop-port](F_20261119_1624_beta3-extensions-develop-port.md) | F | beta3 扩展能力线性迁入 develop | lizhiyuan | 无独立 D：按用户明确确认的逐笔迁移、保留 develop 行为和 Gateway 跨仓边界执行；本次没有另立设计，原扩展契约沿用模块内规约。 |
 
 <a id="module-jiuwenswarm-server-control"></a>
@@ -398,6 +401,14 @@ generated: true
 | [F_20261110_1438_opencode-go-provider](F_20261110_1438_opencode-go-provider.md) | F | 新增 opencode-go 模型供应商 | wang_njust_608 | 无独立 D：需求与方案由本地 Spec Kit 资产 specs/001-opencode-go-provider/ 承载（spec/plan/tasks，仅本地保留、不入库），未另建 .agents/agent-docs 下的 D 编号；上游供应商预设归 agent-gateway 仓。 |
 | [F_20261111_1755_team-leader-goal](F_20261111_1755_team-leader-goal.md) | F | 调度模式领导目标驱动设置实施与验证 | alan_cheng | [D-20261111-1722-team-goal-config](../designs/active/D-20261111-1722-team-goal-config/design.md) |
 
+<a id="module-jiuwenswarm-server-runtime-marketplace"></a>
+
+## jiuwenswarm/server/runtime/marketplace
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [F_20261119_1039_app-hub](F_20261119_1039_app-hub.md) | F | Hub 应用分发与本地安装实施 | kdgmpw | 无独立 D：设计输入为仓库外部的《App Hub 应用资产方案设计》与《App Hub 双仓实施方案》，未在 .agents/agent-docs/designs 建立 D 记录。 |
+
 <a id="module-jiuwenswarm-server-runtime-session"></a>
 
 ## jiuwenswarm/server/runtime/session
@@ -423,14 +434,6 @@ generated: true
 |---|---|---|---|---|
 | [F_20261103_1124_sdk-web-retrieval](F_20261103_1124_sdk-web-retrieval.md) | F | 接入 SDK Web 质量控制与检索预算 | ShowHsiang | 无独立 D：用户在对话中确认实际搜索案例分析后的调整策略，无独立设计文档。 |
 | [F_20261111_1528_unified-observability-config](F_20261111_1528_unified-observability-config.md) | F | Team 与单 Agent 可观测性配置统一为 observability 段 | alan_cheng | 无独立 D：用户在会话中确认的配置收敛改动，无独立设计编号。 |
-
-<a id="module-scripts-acceptance"></a>
-
-## scripts/acceptance
-
-| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
-|---|---|---|---|---|
-| [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 与 TUI 共用会话模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次把 TUI 已有的 mode.set / mode.get 契约（TUI 草稿会话与可靠模式切换的提交）推广到 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
 
 <a id="module-tests"></a>
 

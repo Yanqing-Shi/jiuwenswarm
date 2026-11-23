@@ -1,4 +1,4 @@
-"""Explicit mode switches from every mode-switch channel keep one Session and its project index."""
+"""Explicit mode switches from Web keep one Session and its project index."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from weakref import WeakValueDictionary
 import psutil
 import pytest
 
-from agent_gateway.channel_manager.tui.tui_connect import CLI_FORWARD_REQ_METHODS
 from agent_gateway.channel_manager.web import app_web_handlers
 from jiuwenswarm.common.schema.agent import AgentRequest
 from jiuwenswarm.common.schema.message import ReqMethod
@@ -452,43 +451,46 @@ async def test_chat_on_never_switched_session_keeps_its_route(
 
 
 @pytest.mark.parametrize("method", ["mode.set", "mode.get"])
-def test_mode_requests_are_forwarded_by_every_mode_switch_channel(method):
-    """The Gateway must hand mode requests to AgentServer for TUI and Web alike."""
+def test_mode_requests_are_forwarded_by_the_web_channel(method):
+    """The Gateway must hand Web mode requests to AgentServer."""
     assert ReqMethod(method).value == method
-    assert method in CLI_FORWARD_REQ_METHODS
     assert method in app_web_handlers._FORWARD_REQ_METHODS
     assert method in app_web_handlers._FORWARD_NO_LOCAL_HANDLER_METHODS
 
 
 @pytest.mark.parametrize("stored, caller, owns", [
-    ("tui", "tui", True),
     ("web", "web", True),
-    ("web", "tui", False),
-    ("tui", "web", False),
-    ("", "tui", True),
-    (None, "tui", True),
+    ("web", "feishu", False),
     ("", "web", False),
+    (None, "web", False),
     ("process_cli", "process_cli", False),
     ("feishu", "web", False),
 ])
 def test_mode_switch_channel_owns_only_its_own_sessions(stored, caller, owns):
-    """A channel addresses only its own Sessions; unchanneled legacy ones stay with TUI."""
+    """Web addresses only Sessions it created; other channels and unchanneled Sessions are refused."""
     assert session_metadata.mode_switch_channel_owns({"channel_id": stored}, caller) is owns
 
 
-def test_mode_switch_rejects_a_session_owned_by_another_channel(mode_session, session_channel, monkeypatch):
+@pytest.mark.parametrize("stored_channel", ["feishu", ""])
+def test_mode_switch_rejects_a_session_owned_by_another_channel(
+    mode_session, session_channel, monkeypatch, stored_channel,
+):
+    """A Session another channel created, or one without a recorded channel, cannot be switched."""
     markers = []
     monkeypatch.setattr(session_history, "append_session_mode_changed", lambda **item: markers.append(item))
-    other_channel = next(c for c in sorted(session_metadata.MODE_SWITCH_CHANNELS) if c != session_channel)
+    metadata_path = session_metadata.get_agent_sessions_dir() / "one-session" / "metadata.json"
+    stored = json.loads(metadata_path.read_text(encoding="utf-8"))
+    stored["channel_id"] = stored_channel
+    metadata_path.write_text(json.dumps(stored), encoding="utf-8")
     runtime = AgentRuntime(agent_manager=AsyncMock(), initializer=AsyncMock())
 
     with pytest.raises(SessionModeSwitchError) as switch:
-        _switch(runtime, other_channel, "team.work.normal", "agent.code.normal")
+        _switch(runtime, session_channel, "team.work.normal", "agent.code.normal")
     assert switch.value.code == "NOT_FOUND"
     with pytest.raises(SessionModeSwitchError) as read:
-        _get_mode(other_channel)
+        _get_mode(session_channel)
     assert read.value.code == "NOT_FOUND"
-    assert _get_mode(session_channel)["mode"] == "agent.code.normal"
+    assert json.loads(metadata_path.read_text(encoding="utf-8")) == stored
     assert markers == []
 
 
@@ -756,6 +758,42 @@ def test_batch_mode_migration_skips_a_route_changed_after_the_read(mode_session,
     assert _persisted_mode() == ("agent.work.normal", 1)
 
 
+def _sync_request_mode(channel_id, mode):
+    """Write a request's explicit mode the way chat metadata sync does."""
+    session_metadata.sync_session_request_metadata(
+        session_id="one-session", channel_id=channel_id, mode=mode,
+        explicit_mode_provided=True, user_id="user-1",
+    )
+    session_metadata.flush_pending_writes()
+
+
+@pytest.mark.parametrize("requested, stored", [
+    ("agent.code.normal", "team.code.normal"),
+    ("agent.work.normal", "team.code.normal"),
+    ("team.work.normal", "team.code.normal"),
+    # Plan entry and exit do not go through mode.set, so plan state may drift.
+    ("team.code.plan", "team.code.plan"),
+])
+def test_stale_request_mode_cannot_undo_a_committed_switch(
+    mode_session, session_channel, monkeypatch, requested, stored,
+):
+    """A request that reaches metadata sync without Runtime normalization keeps the committed route."""
+    monkeypatch.setattr(session_history, "append_session_mode_changed", lambda **item: None)
+    runtime = AgentRuntime(agent_manager=AsyncMock(), initializer=AsyncMock())
+    _switch(runtime, session_channel, "team.code.normal", "agent.code.normal")
+
+    _sync_request_mode(session_channel, requested)
+
+    assert _persisted_mode() == (stored, 1)
+
+
+def test_request_mode_still_sets_a_never_switched_session(mode_session, session_channel):
+    """Without a committed mode.set the explicit request mode is stored as on develop."""
+    _sync_request_mode(session_channel, "team.code.normal")
+
+    assert _persisted_mode() == ("team.code.normal", None)
+
+
 def test_team_history_filter_still_reads_the_record_mode():
     relevant = session_history._is_team_relevant
     assert relevant({"event_type": "chat.tool_call", "mode": "team"}) is True
@@ -767,14 +805,14 @@ def test_team_history_filter_still_reads_the_record_mode():
     (ReqMethod.MODE_SET, "process_cli", {"session_id": "one-session", "mode": "team.work.normal"}),
     (ReqMethod.MODE_GET, "process_cli", {"session_id": "one-session"}),
     (ReqMethod.MODE_SET, "feishu", {"session_id": "one-session", "mode": "team.work.normal"}),
-    (ReqMethod.MODE_SET, "tui", {
+    (ReqMethod.MODE_SET, "web", {
         "session_id": "one-session", "mode": "agent.work.normal", "expected_mode": 3,
     }),
     (ReqMethod.MODE_SET, "web", {"session_id": "other-session", "mode": "agent.work.normal"}),
     (ReqMethod.MODE_SET, "web", {"session_id": "one-session"}),
     # A switch must name the mode it expects to replace; a blind overwrite is refused.
     (ReqMethod.MODE_SET, "web", {"session_id": "one-session", "mode": "team.work.normal"}),
-    (ReqMethod.MODE_SET, "tui", {"session_id": "one-session", "mode": "team.work.normal", "expected_mode": None}),
+    (ReqMethod.MODE_SET, "web", {"session_id": "one-session", "mode": "team.work.normal", "expected_mode": None}),
     (ReqMethod.MODE_SET, "web", {"session_id": "one-session", "mode": "team.work.normal", "expected_mode": " "}),
 ])
 async def test_mode_handlers_reject_foreign_channel_and_malformed_params(

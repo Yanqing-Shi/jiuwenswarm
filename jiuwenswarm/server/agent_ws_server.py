@@ -169,6 +169,10 @@ from jiuwenswarm.runtime.session_provisioner import (
     SessionSwitchInput,
 )
 from jiuwenswarm.server.gateway_push.wire import build_server_push_wire
+from jiuwenswarm.server.heartbeat_push import (
+    merge_heartbeat_push_metadata,
+    should_skip_heartbeat_push,
+)
 from jiuwenswarm.server.middleware.chat import (
     should_trigger_before_chat_request,
     trigger_before_chat_request,
@@ -3523,6 +3527,11 @@ class AgentWebSocketServer:
 
             if await self._handle_lifecycle_request(ws, request, send_lock):
                 return
+            # A4P configuration belongs to the application. A legacy client
+            # may still provide a session ID, even for an archived session.
+            if request.req_method in {ReqMethod.A4P_CONFIG_GET, ReqMethod.A4P_CONFIG_UPDATE}:
+                await self._handle_a4p_request(ws, request, send_lock)
+                return
             from jiuwenswarm.server.runtime.session.lifecycle import (
                 LifecycleError,
                 guard,
@@ -4785,6 +4794,7 @@ class AgentWebSocketServer:
         channel_id = request.channel_id or "web"
         params = request.params if isinstance(request.params, dict) else {}
         prompt = str(params.get("content") or params.get("query") or "")
+        route_metadata = dict(request.metadata or {})
         await self.send_push(
             {
                 "request_id": request.request_id,
@@ -4842,6 +4852,18 @@ class AgentWebSocketServer:
                         or payload.get("message")
                         or "Runtime execution failed"
                     )
+                pushed_event_type = (
+                    str(payload.get("event_type") or "")
+                    if isinstance(payload, dict)
+                    else ""
+                )
+                # IM channels do not render runtime telemetry; forwarding it
+                # duplicates the answer that chat.final already delivered.
+                if should_skip_heartbeat_push(
+                    pushed_event_type,
+                    event.channel_id or channel_id,
+                ):
+                    continue
                 is_processing_start = (
                     isinstance(payload, dict)
                     and payload.get("event_type") == "chat.processing_status"
@@ -4862,10 +4884,8 @@ class AgentWebSocketServer:
                         "payload": payload,
                         "agent_ref": event.agent_ref,
                         "is_complete": event.is_complete,
-                        "metadata": (
-                            event.metadata
-                            if event.metadata is not None
-                            else request.metadata
+                        "metadata": merge_heartbeat_push_metadata(
+                            route_metadata, event.metadata
                         ),
                     }
                 )
@@ -11136,7 +11156,8 @@ class AgentWebSocketServer:
     ) -> None:
         """Handle ``mcp.list`` RPC: list marketplace MCPs (read-only).
 
-        filter: builtin(预置目录) | local(已连接预置 + 全部自定义)。兜底 builtin。
+        filter: builtin(单机广场) | hub(企业远端广场) | local(我的)。
+        单机省略时由 marketplace 默认 builtin；企业必须显式 hub|local。
         web 不转发此入口（网关本地已处理），保留只为语义对齐。
         """
         try:
@@ -11144,14 +11165,14 @@ class AgentWebSocketServer:
                 list_mcps_with_hub,
             )
             params = request.params or {}
-            filter_val = str(params.get("filter") or "builtin").strip().lower() or "builtin"
-            if filter_val not in ("builtin", "local"):
-                filter_val = "builtin"
+            filter_val = str(params.get("filter") or "").strip().lower() or None
             items = await list_mcps_with_hub(
                 filter_val,
                 cache_mode=params.get("cache_mode"),
                 refresh=params.get("refresh") is True,
                 query=str(params.get("query") or ""),
+                source_id=str(params.get("source_id") or "").strip() or None,
+                metadata=request.metadata if isinstance(request.metadata, dict) else None,
             )
             resp = AgentResponse(
                 request_id=request.request_id,
@@ -11181,7 +11202,11 @@ class AgentWebSocketServer:
             name = str(params.get("id") or params.get("name") or "").strip()
             if not name:
                 raise ValueError("mcp id or name is required")
-            item = await show_mcp_with_hub(name)
+            item = await show_mcp_with_hub(
+                name,
+                source_id=str(params.get("source_id") or "").strip() or None,
+                metadata=request.metadata if isinstance(request.metadata, dict) else None,
+            )
             if item is None:
                 raise KeyError(f"mcp '{name}' not found")
             # Connected MCP but ToolMgr returned no tools: fall back to a
@@ -11266,8 +11291,15 @@ class AgentWebSocketServer:
             from jiuwenswarm.server.runtime.mcp.marketplace import install_hub_mcp
             from jiuwenswarm.server.runtime.mcp.registry import CliConnectError
 
-            asset_id = str((request.params or {}).get("id") or "").strip()
-            item = await install_hub_mcp(asset_id)
+            params = request.params or {}
+            asset_id = str(params.get("id") or "").strip()
+            item = await install_hub_mcp(
+                asset_id,
+                source_id=str(params.get("source_id") or "").strip() or None,
+                version_id=str(params.get("version_id") or "").strip() or None,
+                package_name=str(params.get("package_name") or "").strip() or None,
+                metadata=request.metadata if isinstance(request.metadata, dict) else None,
+            )
             name = str(item.get("name") or "").strip()
             # Connect failure is non-fatal after a successful download.
             try:
