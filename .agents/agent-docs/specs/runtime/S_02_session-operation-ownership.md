@@ -54,5 +54,7 @@ Core 的宿主决定式压缩（`ContextEngine.compact_context`，Swarm 侧为 `
 `CompactionService.bind` 尚未接到在线 Session。它在被接受时改写共享主记录（Core 侧契约见 core 的
 `S_02_session-conversation-store` 第 5 节），因此接入时属于“改写共享主记录的宿主操作”：与上文第 8 条相同，
 须在 `shared_session_operation(session_id)` 内进行，锁忙返回忙碌而不是排队。precompute 不写记录，无需取锁。目前未实现。
+被接受的压缩在安装时保存窗口并提交 Session，`ContextCheckpointer` 会在这次提交里再保存一次；Core 在安装范围内直接提交，
+不会等待自己持有的锁（`tests/unit_tests/test_context_checkpointer.py` 中的共享窗口压缩用例覆盖）。
 
 依据：[设计草稿 I-00](../../designs/proposals/D-20261112-0530-session-conversation-window/design.md)、[实施记录](../../features/F_20261112_0650_session-operation-ownership.md)。
