@@ -228,3 +228,54 @@ async def test_cancelled_commit_preserves_committed_reference_and_releases_lock(
     monkeypatch.setattr(delegate, "post_agent_execute", original)
     await asyncio.wait_for(stored.session.commit(), 5)
     assert delegate.disk["context"]["default_context_id"]["messages"][0].content == "not yet committed"
+
+
+@pytest.mark.asyncio
+async def test_accepted_compaction_of_a_shared_window_commits_through_the_checkpoint(stored, monkeypatch):
+    """The install saves the window, then the Session commit saves the contexts again inside this wrapper."""
+    from openjiuwen.core.context_engine import (
+        CompactionCandidate, ContextEngineConfig, ConversationBinding, ConversationKey, ConversationSnapshot,
+    )
+    from openjiuwen.core.context_engine.processor.compressor.full_compact_processor import FullCompactProcessorConfig
+    from openjiuwen.core.foundation.llm import AssistantMessage
+    from openjiuwen.core.session.agent import create_agent_session
+    from openjiuwen.core.single_agent import AgentCard
+
+    checkpointer, _ = await native_session(stored, monkeypatch)
+    binding = ConversationBinding(ConversationKey(stored.sid, "main"), checkpointer.conversation_store())
+    await binding.store.create(binding.key)
+    await binding.store.commit(binding.key, ConversationSnapshot(messages=[
+        UserMessage(content="Keep the public API stable. " * 200),
+        AssistantMessage(content="Read the importer and its callers. " * 200),
+        UserMessage(content="Write the parser tests next. " * 200),
+        AssistantMessage(content="Parser tests are half written."),
+    ]))
+    # A shared window is bound before the Session's first run.
+    stored.session = create_agent_session(session_id=stored.sid, card=AgentCard(id="test-agent", name="test"))
+    stored.session.bind_conversation(binding)
+    await stored.session.pre_run(inputs=None)
+    engine = ContextEngine(ContextEngineConfig(
+        enable_tiktoken_counter=False, enable_openrouter_model_context_window_tokens=False,
+    ))
+    context = await engine.create_context(session=stored.session, processors=[("FullCompactProcessor", (
+        FullCompactProcessorConfig(trigger_total_tokens=1, messages_to_keep=1, compression_call_max_tokens=100000)
+    ))])
+
+    class Model:
+        async def invoke(self, *args, **kwargs):
+            return AssistantMessage(content="Importer work: parser tests half written.")
+
+    context._processors[0]._model = Model()
+    bind_context_checkpoint(engine, stored.session)
+
+    async def accept(request, next_handler):
+        return await next_handler(request)
+
+    engine.register_compaction_hook(accept)
+    result = await asyncio.wait_for(engine.compact_context(session=stored.session, trigger="manual"), 5)
+
+    assert isinstance(result, CompactionCandidate)
+    assert not context.compaction_uncertain()
+    record = (await binding.store.read(binding.key)).messages
+    assert any("parser tests half written" in str(message.content) for message in record)
+    assert [message.content for message in record] == [message.content for message in context.get_messages()]
