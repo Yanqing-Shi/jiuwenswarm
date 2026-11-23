@@ -28,7 +28,7 @@ def operation_session(tmp_path, monkeypatch):
     directory = sessions / "shared-operation"
     directory.mkdir(parents=True)
     lc.atomic_json(directory / "metadata.json", dict(
-        session_id=directory.name, channel_id="tui", user_id="test-user",
+        session_id=directory.name, channel_id="web", user_id="test-user",
         project_id="default", mode="agent.work.normal", work_mode="work",
     ))
     yield directory.name
@@ -44,7 +44,7 @@ def operation_session(tmp_path, monkeypatch):
 async def test_active_operation_excludes_mode_switch(operation_session, kind):
     sid = operation_session
     coordinator = RuntimeSessionCoordinator()
-    await coordinator.register_session(sid, "tui")
+    await coordinator.register_session(sid, "web")
     runtime = AgentRuntime(agent_manager=AsyncMock(), session_coordinator=coordinator)
     entered, finish = asyncio.Event(), asyncio.Event()
 
@@ -72,7 +72,7 @@ async def test_active_operation_excludes_mode_switch(operation_session, kind):
         with pytest.raises(SessionModeSwitchError) as busy:
             runtime.switch_session_mode(
                 session_id=sid, target_mode="team.work.normal", expected_mode="agent.work.normal",
-                channel_id="tui", user_id="test-user",
+                channel_id="web", user_id="test-user",
             )
         assert busy.value.code == "SESSION_BUSY"
         assert lc.raw_metadata(sid)["mode"] == "agent.work.normal"
@@ -88,7 +88,7 @@ async def test_active_operation_excludes_mode_switch(operation_session, kind):
 async def test_waiting_interaction_keeps_lock_and_answer_uses_owner(operation_session):
     coordinator = RuntimeSessionCoordinator()
     sid = operation_session
-    await coordinator.register_session(sid, "tui")
+    await coordinator.register_session(sid, "web")
     await coordinator.run_unary(
         sid, "question", SessionWorkKind.CHAT_UNARY,
         lambda: asyncio.sleep(0, result="ask"), interaction_ids=lambda _: frozenset({"question"}),
@@ -160,7 +160,7 @@ async def test_public_chat_entry_holds_lock_until_executor_finishes(operation_se
     monkeypatch.setattr(manager.agent, "process_message", unary)
     monkeypatch.setattr(manager.agent, "process_message_stream", stream)
     request = AgentRequest(
-        request_id="public-chat", session_id=sid, channel_id="tui", user_id="test-user",
+        request_id="public-chat", session_id=sid, channel_id="web", user_id="test-user",
         req_method=ReqMethod.CHAT_SEND, is_stream=streaming,
         params={"mode": "agent.work.normal", "query": "hello"},
     )
@@ -176,7 +176,7 @@ async def test_public_chat_entry_holds_lock_until_executor_finishes(operation_se
         with pytest.raises(SessionModeSwitchError) as busy:
             runtime.switch_session_mode(
                 session_id=sid, target_mode="agent.work.plan", expected_mode="agent.work.normal",
-                channel_id="tui", user_id="test-user",
+                channel_id="web", user_id="test-user",
             )
         assert busy.value.code == "SESSION_BUSY"
         with pytest.raises(SessionOperationBusyError):
@@ -221,7 +221,7 @@ async def test_native_leader_keeps_ownership_through_final_checkpoint(
     try:
         await harness.start()
         sid = harness.session_id
-        await coordinator.register_session(sid, "tui")
+        await coordinator.register_session(sid, "web")
         context_token = set_runtime_context(runtime, AsyncMock())
         try:
             await bind_native_operation(harness, sid, lambda request_id=None: None)
@@ -280,7 +280,7 @@ async def test_native_leader_keeps_ownership_through_final_checkpoint(
 async def test_cancelled_stream_retains_lock_while_executor_closes(operation_session):
     coordinator = RuntimeSessionCoordinator()
     sid = operation_session
-    await coordinator.register_session(sid, "tui")
+    await coordinator.register_session(sid, "web")
     closing, finish = asyncio.Event(), asyncio.Event()
 
     async def executor():
@@ -310,7 +310,7 @@ async def test_cancelled_stream_retains_lock_while_executor_closes(operation_ses
 async def test_closing_coordinator_releases_waiterless_round_reference(operation_session):
     sid = operation_session
     coordinator = RuntimeSessionCoordinator()
-    snapshot = await coordinator.register_session(sid, "tui")
+    snapshot = await coordinator.register_session(sid, "web")
     coordinator.resume_waiting_for_input(sid, snapshot.generation)
     with pytest.raises(SessionOperationBusyError):
         acquire_operation("session", sid)
@@ -342,11 +342,11 @@ async def test_public_chat_does_not_start_during_a_mode_switch(operation_session
                         lambda **kwargs: pause_then_call(original_switch, **kwargs))
     mutation = asyncio.create_task(asyncio.to_thread(
         runtime.switch_session_mode, session_id=sid, target_mode="agent.code.normal",
-        expected_mode="agent.work.normal", channel_id="tui", user_id="test-user",
+        expected_mode="agent.work.normal", channel_id="web", user_id="test-user",
     ))
 
     request = AgentRequest(
-        request_id="chat-during-mutation", session_id=sid, channel_id="tui", user_id="test-user",
+        request_id="chat-during-mutation", session_id=sid, channel_id="web", user_id="test-user",
         req_method=ReqMethod.CHAT_SEND, is_stream=streaming,
         params={"mode": "agent.work.normal", "query": "hello"},
     )
@@ -407,10 +407,10 @@ async def test_chat_waiting_behind_a_mode_switch_runs_as_the_committed_run_type(
     monkeypatch.setattr(runtime, "_switch_session_mode_locked", paused_switch)
     mutation = asyncio.create_task(asyncio.to_thread(
         runtime.switch_session_mode, session_id=sid, target_mode=after,
-        expected_mode=before, channel_id="tui", user_id="test-user",
+        expected_mode=before, channel_id="web", user_id="test-user",
     ))
     request = AgentRequest(
-        request_id="waiting-chat", session_id=sid, channel_id="tui", user_id="test-user",
+        request_id="waiting-chat", session_id=sid, channel_id="web", user_id="test-user",
         req_method=ReqMethod.CHAT_SEND, is_stream=streaming,
         params={"mode": before, "query": "hello"},
     )
@@ -457,7 +457,7 @@ async def test_leader_confirms_the_mode_once_per_owned_operation(operation_sessi
 
     sid = operation_session
     coordinator = RuntimeSessionCoordinator()
-    await coordinator.register_session(sid, channel_id="tui")
+    await coordinator.register_session(sid, channel_id="web")
     class Harness:
         state = "idle"
 
@@ -515,7 +515,7 @@ async def test_run_behind_repeated_mode_switches_stays_queued_until_one_settles(
     monkeypatch.setattr(runtime, "_invoke_routed", routed)
     monkeypatch.setattr(runtime, "_stream_under_tenant", routed_stream)
     request = AgentRequest(
-        request_id="queued", session_id="any", channel_id="tui", user_id="test-user",
+        request_id="queued", session_id="any", channel_id="web", user_id="test-user",
         req_method=ReqMethod.CHAT_SEND, is_stream=streaming, params={"query": "hello"},
     )
     if streaming:
@@ -558,7 +558,7 @@ async def test_mode_switch_is_refused_while_an_earlier_run_is_still_starting(
 
     runtime._session_coordinator.set_operation_admission(slow_start)
     request = AgentRequest(
-        request_id="slow-to-start", session_id=sid, channel_id="tui", user_id="test-user",
+        request_id="slow-to-start", session_id=sid, channel_id="web", user_id="test-user",
         req_method=ReqMethod.CHAT_SEND, is_stream=streaming,
         params={"mode": "agent.work.normal", "query": "hello"},
     )
@@ -571,7 +571,7 @@ async def test_mode_switch_is_refused_while_an_earlier_run_is_still_starting(
     def switch():
         return runtime.switch_session_mode(
             session_id=sid, target_mode="team.work.normal", expected_mode="agent.work.normal",
-            channel_id="tui", user_id="test-user",
+            channel_id="web", user_id="test-user",
         )
 
     task = asyncio.create_task(chat())
