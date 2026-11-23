@@ -473,11 +473,15 @@ def _inject_user_web_runtime_config(document: str) -> str:
         document.replace("__JIUWENSWARM_EDITION_VALUE__", edition)
         .replace("__JIUWEN_WEB_TRANSPORT_VALUE__", _runtime_web_transport())
         .replace("__JIUWEN_LOGIN_AUTH_SIMULATE_VALUE__", login_auth_simulate)
+        .replace("__JIUWEN_IFRAME_HOST_ISOLATION_VALUE__", str(edition == "personal").lower())
     )
 
 
 class _SpaStaticHandler(SimpleHTTPRequestHandler):
     """Static file handler with SPA fallback to index.html."""
+
+    _TOP_LEVEL_DOCUMENT_CSP = "frame-ancestors 'none'"
+    _EMBEDDABLE_DOCUMENT_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads"
 
     extensions_map = {
         **SimpleHTTPRequestHandler.extensions_map,
@@ -894,9 +898,12 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
             resp_body = b"" if stream_response else resp.read()
 
             self.send_response(resp.status, resp.reason)
+            document_policy = self._host_document_policy()
             for key, value in resp.getheaders():
                 if key.lower() in self._HOP_BY_HOP_HEADERS:
                     continue
+                if key.lower() == "content-security-policy" and value == document_policy:
+                    continue  # end_headers sends this policy once for the outer origin.
                 self.send_header(key, value)
             if streaming:
                 self.close_connection = True
@@ -2073,6 +2080,7 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
 
         try:
             from jiuwenswarm.agents.harness.common.tools.web_file_download import (
+                PURPOSE_ASSET_EXPORT,
                 PURPOSE_SKILL_CONTENT_IMAGE,
                 validate_file_download_token,
             )
@@ -2126,6 +2134,12 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
                 return
             self._serve_verified_local_download(str(file_path), inline=True)
             return
+        # 资产导出 token 为短时效令牌，不享受交付产物的过期豁免：过期即 403，
+        # 未过期则继续走下方通用文件桥（含 AgentOS 代理）。
+        if payload is not None and str(payload.get("purpose") or "") == PURPOSE_ASSET_EXPORT:
+            if validate_file_download_token(token, check_expiry=True) is None:
+                self._write_json(403, {"error": "invalid_or_expired_token"})
+                return
         verified_download_name: str | None = None
         if payload is not None:
             # 本进程 secret 能校验并不意味着 token 的路径位于 Gateway 宿主机。
@@ -2528,6 +2542,9 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/file-api/skills/upload-temp":
             self._handle_skills_upload_temp()
             return
+        if parsed.path == "/file-api/assets/upload-temp":
+            self._handle_assets_upload_temp()
+            return
         if parsed.path == "/file-api/external-cli/custom-agents":
             self._handle_custom_agent_upload()
             return
@@ -2635,10 +2652,46 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
 
     def _handle_skills_upload_temp(self) -> None:
         from jiuwenswarm.server.runtime.skill.skills_multipart_http import (
+            SKILL_UPLOAD_MAX_REQUEST_BYTES,
             handle_skills_upload_temp_http,
+            skill_http_error_body,
         )
 
+        length = self._parse_content_length()
+        if length > SKILL_UPLOAD_MAX_REQUEST_BYTES:
+            self._discard_request_body(length)
+            self._write_json(
+                413,
+                skill_http_error_body("SKILL_FILE_TOO_LARGE", "上传包超过限制"),
+            )
+            return
         status, payload = handle_skills_upload_temp_http(
+            content_type=self.headers.get("Content-Type", ""),
+            body=self._read_request_body(),
+        )
+        self._write_json(status, payload)
+
+    def _handle_assets_upload_temp(self) -> None:
+        from jiuwenswarm.server.runtime.assets.upload_http import (
+            MAX_ASSETS_UPLOAD_BYTES,
+            handle_assets_upload_temp_http,
+        )
+
+        length = self._parse_content_length()
+        if length > MAX_ASSETS_UPLOAD_BYTES:
+            # 不消费请求体就提前应答会复位连接，浏览器收不到 413 JSON
+            # 而报 "Failed to fetch"（与 _handle_designer_upload 同一处理）。
+            self._discard_request_body(length)
+            self._write_json(
+                413,
+                {
+                    "code": "ASSET_LIMIT_EXCEEDED",
+                    "message": "upload too large",
+                    "error": "upload too large",
+                },
+            )
+            return
+        status, payload = handle_assets_upload_temp_http(
             content_type=self.headers.get("Content-Type", ""),
             body=self._read_request_body(),
         )
@@ -2950,10 +3003,25 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
                 return candidate
         return None
 
+    def _host_document_policy(self) -> str | None:
+        from jiuwenswarm.enterprise import is_enterprise
+
+        if is_enterprise():
+            return None
+        # Bundled pages and the trusted login callback run top-level with their
+        # original origin. All other documents on this origin stay sandboxed,
+        # including proxied content and files opened outside an iframe.
+        if getattr(self, "_static_cache_control", None) or urlparse(self.path).path == "/api/v1/auth/callback":
+            return self._TOP_LEVEL_DOCUMENT_CSP
+        return self._EMBEDDABLE_DOCUMENT_CSP
+
     def end_headers(self) -> None:
         # 缓存策略在 send_head 里决定、这里统一落头：super().send_head() 内部
         # 就会调用 end_headers，之后再追加头已来不及。非静态路径不设置该
         # 标记，API/代理响应仍走各自的 no-store。
+        document_policy = self._host_document_policy()
+        if document_policy:
+            self.send_header("Content-Security-Policy", document_policy)
         cache_control = getattr(self, "_static_cache_control", None)
         if cache_control:
             self._static_cache_control = None
@@ -3274,6 +3342,27 @@ def main() -> None:
     _ConfiguredHandler.logs_root = logs_root
     _ConfiguredHandler.logger = logger
     handler = partial(_ConfiguredHandler, directory=str(dist_dir))
+
+    def _cleanup_stale_skill_uploads() -> None:
+        try:
+            from jiuwenswarm.server.runtime.skill.skills_multipart_http import (
+                cleanup_stale_skill_uploads,
+            )
+
+            removed = cleanup_stale_skill_uploads()
+            if removed:
+                logger.info(
+                    "[jiuwenswarm-web] removed %s stale skill uploads", removed
+                )
+        except Exception as exc:  # noqa: BLE001 - 清理失败不应阻断启动
+            logger.debug("[jiuwenswarm-web] skill upload cleanup skipped: %s", exc)
+
+    # 技能导入临时上传的兜底回收放到后台线程，避免拖慢 Web 启动。
+    threading.Thread(
+        target=_cleanup_stale_skill_uploads,
+        name="skill-upload-cleanup",
+        daemon=True,
+    ).start()
     server = ThreadingHTTPServer((args.host, args.port), handler)
     office_listener = None
     if desktop_token:

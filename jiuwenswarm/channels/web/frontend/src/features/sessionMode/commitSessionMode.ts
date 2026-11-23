@@ -1,7 +1,6 @@
 /**
- * Commit a saved Session's execution mode through `mode.set`, the same backend
- * entry the TUI uses, and read it back with `mode.get` when the outcome of the
- * commit is unknown. The server's answer is authoritative; the caller applies
+ * Commit a saved Session's execution mode through `mode.set`, and read it back
+ * with `mode.get` when the outcome of the commit is unknown. The server's answer is authoritative; the caller applies
  * the returned mode instead of its own target.
  */
 

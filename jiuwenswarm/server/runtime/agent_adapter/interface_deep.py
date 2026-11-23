@@ -29,7 +29,7 @@ from pathlib import Path
 from shutil import copytree, ignore_patterns, which
 from tempfile import TemporaryDirectory
 from urllib.parse import urlparse
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Coroutine, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from agent_gateway.common.model_selection import ModelSelection
@@ -89,10 +89,7 @@ from openjiuwen.harness import (
     DeepAgentConfig,
     VisionModelConfig,
 )
-from openjiuwen.harness.factory import (
-    _inject_general_purpose_subagent,
-    create_deep_agent,
-)
+from openjiuwen.harness import factory as harness_factory
 from openjiuwen.harness.image_modality_probe import get_cached_image_support
 from openjiuwen.harness.prompts import resolve_language
 from openjiuwen.harness.rails import (
@@ -131,6 +128,26 @@ from openjiuwen.harness.rails.context_engineer.context_assemble_rail import Cont
 from openjiuwen.harness.rails.context_engineer.context_processor_rail import ContextProcessorRail
 from openjiuwen.harness.subagents.browser_agent import build_browser_agent_config
 from openjiuwen.harness.subagents.code_agent import build_code_agent_config
+
+# AgentSSAS: 可选导入 AgentSSASSecurityRail(fail-open,未安装时降级为不注册)
+# 注: try/except 条件导入块整体对 E402 豁免, _SSAS_AVAILABLE 赋值必须
+# 放在块内(而非 try 之前的裸赋值), 否则后续导入全部触发 E402
+# 捕获 Exception 而非仅 ImportError: agent-ssas 安装损坏(依赖的二进制
+# 模块异常/配置解析错误等任意导入期异常)同样降级为不注册, 可选组件的
+# 导入失败不得拖垮宿主模块; 异常细节进告警日志保持可观测
+try:
+    from agent_ssas.core.framework.config.settings import AgentSSASConfig
+    from agent_ssas.backend_client.openjiuwen.agent_ssas_security_rail import AgentSSASSecurityRail
+    _SSAS_AVAILABLE = True
+except Exception as _ssas_import_exc:
+    AgentSSASSecurityRail = None  # type: ignore[assignment,misc]
+    _SSAS_AVAILABLE = False
+    # 模块级 logger 尚未定义,此处必须内联获取,确保 fail-open 不因日志而崩溃
+    logging.getLogger(__name__).warning(
+        "[JiuWenSwarmDeepAdapter] AgentSSASSecurityRail not loaded: %s",
+        _ssas_import_exc,
+    )
+
 from openjiuwen.harness.subagents.research_agent import build_research_agent_config
 from openjiuwen.harness.subagent_runtime import (
     SUBAGENT_ACTIVITY_EVENT_TYPE,
@@ -163,12 +180,12 @@ from jiuwenswarm.runtime.checkpointer import (
 from jiuwenswarm.server.runtime.session.history_io import (
     run_history_io, run_stream_parser, stream_chunk_writes_history,
 )
+from jiuwenswarm.server.runtime.session.recovery_budget import LegacyGroupLimit, serialize_adapter_assembly
 
 from jiuwenswarm.server.runtime.agent_adapter.permission_rail_group import (
     PERMISSION_GROUP_TYPES, PERMISSION_RAIL_TYPES, PermissionRailGroup, build_permission_group,
 )
 from jiuwenswarm.server.runtime.agent_adapter.permission_continuation import (
-    has_live_pending_interrupt,
     discard_pending_permission_interrupt_for_target,
     discard_permission_continuation, validate_client_tool_answers, validate_manual_resume,
     discard_restored_permission_batch, unanswered_permission_batch,
@@ -183,213 +200,16 @@ from jiuwenswarm.server.runtime.agent_adapter.permission_dispatch import (
 from jiuwenswarm.server.runtime.agent_adapter.permission_runtime_state import (
     SessionPermissionState,
 )
+from jiuwenswarm.server.runtime.agent_adapter.subagent_registration import (
+    resolve_subagent_registration_plan,
+)
 
 from jiuwenswarm.server.runtime.agent_adapter.trusted_web_search import (
     TrustedWebFreeSearchTool,
 )
+
 from jiuwenswarm.agents.harness.common.rsi.errors import RsiError, RsiHarnessInstallConflict
 from jiuwenswarm.agents.harness.common.recommendation.prompt_suggestion import USER_INTERACTION_EVENTS
-
-GOAL_UPDATED_EVENT_TYPE = InteractionEventType.GOAL_UPDATED.value
-_ERROR_EVENT = getattr(InteractionEventType, "EXECUTION_ERROR", None)
-if _ERROR_EVENT is None:
-    _ERROR_EVENT = getattr(InteractionEventType, "RUNTIME_ERROR")
-ERROR_EVENT_TYPE = _ERROR_EVENT.value
-
-# SDK chunk types that close one interaction round's output. ``answer`` carries
-# every round result (normal answer, empty answer, goal attempt boundary); HITL
-# interrupt frames replace it when a round stops for a human decision.
-_ROUND_TERMINAL_CHUNK_TYPES = frozenset(
-    {
-        "answer",
-        "chat.ask_user_question",
-        "__interaction__",
-    }
-)
-
-# Upper bound for the per-round streamed-text memo used to de-duplicate a
-# demoted goal attempt final. Long enough for a full answer, bounded so a
-# many-step round cannot grow it without limit.
-_ROUND_VISIBLE_TEXT_MAX_CHARS = 256 * 1024
-
-# TTSE Auto-dream knobs are Host-fixed (not user yaml).
-_TTSE_DREAM_INTERVAL = 50
-_TTSE_DREAM_MIN_HOURS = 24.0
-_TTSE_DREAM_TTL_DAYS = 90
-_TTSE_CONSULT_TOOL_NAME = "ttse_consult"
-# SDK EvolutionRail.cleanup_background_tasks hard-waits 120s then cancels; TTSE
-# detect+induce+classify often needs longer, so Host drains with a wider budget.
-_TTSE_CLEANUP_WAIT_SECS = 600.0
-# Default GENERATE_RECORDS_LLM_POLICY uses attempt=150; Host widens induce to 300s.
-_TTSE_INDUCE_ATTEMPT_TIMEOUT_SECS = 300.0
-_TTSE_INDUCE_TOTAL_BUDGET_SECS = 300.0
-
-
-def _ttse_induce_llm_policy() -> Any:
-    """Host-fixed LLM policy for TTSE induce/blame/synthesize/classify."""
-    from openjiuwen.agent_evolving.optimizer.llm_resilience import LLMInvokePolicy
-
-    return LLMInvokePolicy(
-        attempt_timeout_secs=_TTSE_INDUCE_ATTEMPT_TIMEOUT_SECS,
-        total_budget_secs=_TTSE_INDUCE_TOTAL_BUDGET_SECS,
-        max_attempts=2,
-    )
-
-
-async def _drain_ttse_rail_background_tasks(
-    rail: Any,
-    *,
-    timeout_secs: float = _TTSE_CLEANUP_WAIT_SECS,
-) -> None:
-    """Wait for TTSERail bg tasks, then force-cancel after ``timeout_secs``.
-
-    Mirrors ``EvolutionRail.cleanup_background_tasks`` but uses the Host budget
-    instead of the SDK's hardcoded 120s wait.
-    """
-    bg_tasks = getattr(rail, "_bg_tasks", None)
-    if bg_tasks is None:
-        cleanup = getattr(rail, "cleanup_background_tasks", None)
-        if callable(cleanup):
-            await cleanup()
-        return
-    pending = [task for task in list(bg_tasks) if not task.done()]
-    for task in pending:
-        try:
-            wait = getattr(task, "wait", None)
-            waiter = wait() if callable(wait) else asyncio.shield(task)
-            await asyncio.wait_for(waiter, timeout=timeout_secs)
-        except TimeoutError:
-            logger.warning(
-                "[JiuWenSwarmDeepAdapter] TTSE background task still running after "
-                "%.0fs wait; cancelling",
-                timeout_secs,
-            )
-            cancel = getattr(task, "cancel", None)
-            if callable(cancel):
-                try:
-                    result = cancel(reason="ttse_host_cleanup_wait_timeout")
-                except TypeError:
-                    result = cancel()
-                if asyncio.iscoroutine(result):
-                    await result
-        except Exception as exc:
-            logger.warning(
-                "[JiuWenSwarmDeepAdapter] TTSE background task wait failed: %s",
-                exc,
-            )
-        finally:
-            # A later equipment transition must still see surviving writers.
-            if isinstance(bg_tasks, set) and task.done():
-                bg_tasks.discard(task)
-
-
-async def _agent_template_version(pkg_dir: Path) -> str:
-    """Installed expert version from openjiuwen's card; empty when the manifest cannot be read."""
-    from openjiuwen.harness.resources import read_agent_template_card
-
-    try:
-        return (await read_agent_template_card(pkg_dir / "manifest.json")).version
-    except ValueError:
-        return ""
-
-
-def _merge_ttse_config(runtime_config: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Yaml ``react.ttse`` plus runtime overlay (runtime keys win).
-
-    Same merge used by TTSERail mount and ``ttse_consult`` eager gating so a
-    sparse runtime cache (OfficeAce sync snapshot omitting ``ttse``) still
-    inherits the on-disk default. An explicit runtime ``enabled: false`` wins.
-    """
-    merged: dict[str, Any] = {}
-    try:
-        yaml_ttse = _get_ttse_config(get_config())
-    except Exception:
-        yaml_ttse = {}
-    if isinstance(yaml_ttse, dict):
-        merged.update(yaml_ttse)
-    runtime = _get_ttse_config(runtime_config)
-    if isinstance(runtime, dict):
-        merged.update(runtime)
-    return merged
-
-
-def _ttse_consult_should_be_eager(react_config: dict[str, Any] | None) -> bool:
-    """True when TTSE is opted in and inject is on, so ``ttse_consult`` stays visible."""
-    if not isinstance(react_config, dict):
-        return False
-    merged = _merge_ttse_config(react_config)
-    if not get_ttse_enabled({"ttse": merged}):
-        return False
-    return coerce_config_bool(merged.get("inject_enabled"), True)
-
-
-def _ensure_ttse_consult_eager_tool(
-    eager_tools: list[str],
-    react_config: dict[str, Any] | None,
-) -> list[str]:
-    """Insert or strip ``ttse_consult`` for first-turn visibility helpers.
-
-    This repo's ProgressiveToolRail uses ToolCard exposure (not an eager_tools
-    list). The helper remains for tests / future callers that still pass a list.
-    """
-    if not _ttse_consult_should_be_eager(react_config):
-        return [name for name in eager_tools if name != _TTSE_CONSULT_TOOL_NAME]
-    if _TTSE_CONSULT_TOOL_NAME in eager_tools:
-        return eager_tools
-    if "skill_acceleration_exec" in eager_tools:
-        eager_tools.insert(
-            eager_tools.index("skill_acceleration_exec"),
-            _TTSE_CONSULT_TOOL_NAME,
-        )
-    else:
-        insert_at = 2 if len(eager_tools) >= 2 else len(eager_tools)
-        eager_tools.insert(insert_at, _TTSE_CONSULT_TOOL_NAME)
-    return eager_tools
-
-
-def _strip_whitespace(text: str) -> str:
-    """Whitespace-free form used to compare two renderings of the same text.
-
-    Collapsing to a single space (the frontend's ``collapseWs``) is not enough
-    here: a round's answer re-wraps the streamed tokens, and CJK text has no
-    space at the point where a newline was inserted.
-    """
-    return re.sub(r"\s+", "", text or "")
-
-
-def _is_attach_only_subscription(params: Any) -> bool:
-    """Whether the request params describe a team attach-only subscription.
-
-    An attach-only ``chat.send`` is a passive event subscription: it submits
-    no input, creates no runtime, and runs no model.  Execution-scoped side
-    effects (model config checks, active-session marking, task reservation)
-    must skip it — otherwise a long-lived subscription keeps the session
-    marked as executing and blocks unrelated operations such as model
-    switches.
-    """
-    from jiuwenswarm.runtime.session.model import TEAM_ATTACH_ONLY_PARAM
-
-    return isinstance(params, dict) and params.get(TEAM_ATTACH_ONLY_PARAM) is True
-
-try:
-    from openjiuwen.harness.tools import is_paid_search_enabled
-except ImportError:  # Compatibility with older agent-core versions.
-    try:
-        from openjiuwen.harness.tools.web_tools import is_paid_search_enabled
-    except ImportError:
-
-        def is_paid_search_enabled() -> bool:
-            api_key_envs = (
-                "BOCHA_API_KEY",
-                "PERPLEXITY_API_KEY",
-                "SERPER_API_KEY",
-                "JINA_API_KEY",
-            )
-            for key in api_key_envs:
-                if str(os.environ.get(key, "") or "").strip():
-                    return True
-            return False
-
 
 from agent_gateway.common.session_message import SESSION_MESSAGE_INTERNAL_KEY  # noqa: E402  # pylint: disable=wrong-import-order
 
@@ -591,9 +411,6 @@ from jiuwenswarm.server.runtime.session.history_context import history_context_s
 from jiuwenswarm.server.runtime.session.history_replay import HistoryReplayError
 from jiuwenswarm.server.runtime import extension_package_manager as equipment
 
-# Goal 用户历史：忙碌插队时先挂起，等上一轮→goal 边界（或流结束）再落盘，
-# 时间戳与 live「答完再入列」对齐。按 session 暂存，跨同 session 的并发 stream 共享。
-_pending_goal_objective_history: dict[str, dict[str, Any]] = {}
 from agent_gateway.common.mode_matrix import (  # pylint: disable=wrong-import-order
     NEW_AGENT_WORK_NORMAL,
     NEW_AGENT_WORK_PLAN,
@@ -813,6 +630,214 @@ from jiuwenswarm.common.utils import (
 )
 from jiuwenswarm.dotenv_early import load_dotenv_runtime
 
+GOAL_UPDATED_EVENT_TYPE = InteractionEventType.GOAL_UPDATED.value
+_ERROR_EVENT = getattr(InteractionEventType, "EXECUTION_ERROR", None)
+if _ERROR_EVENT is None:
+    _ERROR_EVENT = getattr(InteractionEventType, "RUNTIME_ERROR")
+ERROR_EVENT_TYPE = _ERROR_EVENT.value
+
+# SDK chunk types that close one interaction round's output. ``answer`` carries
+# every round result (normal answer, empty answer, goal attempt boundary); HITL
+# interrupt frames replace it when a round stops for a human decision.
+_ROUND_TERMINAL_CHUNK_TYPES = frozenset(
+    {
+        "answer",
+        "chat.ask_user_question",
+        "__interaction__",
+    }
+)
+
+# Upper bound for the per-round streamed-text memo used to de-duplicate a
+# demoted goal attempt final. Long enough for a full answer, bounded so a
+# many-step round cannot grow it without limit.
+_ROUND_VISIBLE_TEXT_MAX_CHARS = 256 * 1024
+
+# TTSE Auto-dream knobs are Host-fixed (not user yaml).
+_TTSE_DREAM_INTERVAL = 50
+_TTSE_DREAM_MIN_HOURS = 24.0
+_TTSE_DREAM_TTL_DAYS = 90
+_TTSE_CONSULT_TOOL_NAME = "ttse_consult"
+# SDK EvolutionRail.cleanup_background_tasks hard-waits 120s then cancels; TTSE
+# detect+induce+classify often needs longer, so Host drains with a wider budget.
+_TTSE_CLEANUP_WAIT_SECS = 600.0
+# Default GENERATE_RECORDS_LLM_POLICY uses attempt=150; Host widens induce to 300s.
+_TTSE_INDUCE_ATTEMPT_TIMEOUT_SECS = 300.0
+_TTSE_INDUCE_TOTAL_BUDGET_SECS = 300.0
+
+
+def _ttse_induce_llm_policy() -> Any:
+    """Host-fixed LLM policy for TTSE induce/blame/synthesize/classify."""
+    from openjiuwen.agent_evolving.optimizer.llm_resilience import LLMInvokePolicy
+
+    return LLMInvokePolicy(
+        attempt_timeout_secs=_TTSE_INDUCE_ATTEMPT_TIMEOUT_SECS,
+        total_budget_secs=_TTSE_INDUCE_TOTAL_BUDGET_SECS,
+        max_attempts=2,
+    )
+
+
+async def _drain_ttse_rail_background_tasks(
+    rail: Any,
+    *,
+    timeout_secs: float = _TTSE_CLEANUP_WAIT_SECS,
+) -> None:
+    """Wait for TTSERail bg tasks, then force-cancel after ``timeout_secs``.
+
+    Mirrors ``EvolutionRail.cleanup_background_tasks`` but uses the Host budget
+    instead of the SDK's hardcoded 120s wait.
+    """
+    bg_tasks = getattr(rail, "_bg_tasks", None)
+    if bg_tasks is None:
+        cleanup = getattr(rail, "cleanup_background_tasks", None)
+        if callable(cleanup):
+            await cleanup()
+        return
+    pending = [task for task in list(bg_tasks) if not task.done()]
+    for task in pending:
+        try:
+            wait = getattr(task, "wait", None)
+            waiter = wait() if callable(wait) else asyncio.shield(task)
+            await asyncio.wait_for(waiter, timeout=timeout_secs)
+        except TimeoutError:
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] TTSE background task still running after "
+                "%.0fs wait; cancelling",
+                timeout_secs,
+            )
+            cancel = getattr(task, "cancel", None)
+            if callable(cancel):
+                try:
+                    result = cancel(reason="ttse_host_cleanup_wait_timeout")
+                except TypeError:
+                    result = cancel()
+                if asyncio.iscoroutine(result):
+                    await result
+        except Exception as exc:
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] TTSE background task wait failed: %s",
+                exc,
+            )
+        finally:
+            # A later equipment transition must still see surviving writers.
+            if isinstance(bg_tasks, set) and task.done():
+                bg_tasks.discard(task)
+
+
+async def _agent_template_version(pkg_dir: Path) -> str:
+    """Installed expert version from openjiuwen's card; empty when the manifest cannot be read."""
+    from openjiuwen.harness.resources import read_agent_template_card
+
+    try:
+        return (await read_agent_template_card(pkg_dir / "manifest.json")).version
+    except ValueError:
+        return ""
+
+
+def _merge_ttse_config(runtime_config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Yaml ``react.ttse`` plus runtime overlay (runtime keys win).
+
+    Same merge used by TTSERail mount and ``ttse_consult`` eager gating so a
+    sparse runtime cache (OfficeAce sync snapshot omitting ``ttse``) still
+    inherits the on-disk default. An explicit runtime ``enabled: false`` wins.
+    """
+    merged: dict[str, Any] = {}
+    try:
+        yaml_ttse = _get_ttse_config(get_config())
+    except Exception:
+        yaml_ttse = {}
+    if isinstance(yaml_ttse, dict):
+        merged.update(yaml_ttse)
+    runtime = _get_ttse_config(runtime_config)
+    if isinstance(runtime, dict):
+        merged.update(runtime)
+    return merged
+
+
+def _ttse_consult_should_be_eager(react_config: dict[str, Any] | None) -> bool:
+    """True when TTSE is opted in and inject is on, so ``ttse_consult`` stays visible."""
+    if not isinstance(react_config, dict):
+        return False
+    merged = _merge_ttse_config(react_config)
+    if not get_ttse_enabled({"ttse": merged}):
+        return False
+    return coerce_config_bool(merged.get("inject_enabled"), True)
+
+
+def _ensure_ttse_consult_eager_tool(
+    eager_tools: list[str],
+    react_config: dict[str, Any] | None,
+) -> list[str]:
+    """Insert or strip ``ttse_consult`` for first-turn visibility helpers.
+
+    This repo's ProgressiveToolRail uses ToolCard exposure (not an eager_tools
+    list). The helper remains for tests / future callers that still pass a list.
+    """
+    if not _ttse_consult_should_be_eager(react_config):
+        return [name for name in eager_tools if name != _TTSE_CONSULT_TOOL_NAME]
+    if _TTSE_CONSULT_TOOL_NAME in eager_tools:
+        return eager_tools
+    if "skill_acceleration_exec" in eager_tools:
+        eager_tools.insert(
+            eager_tools.index("skill_acceleration_exec"),
+            _TTSE_CONSULT_TOOL_NAME,
+        )
+    else:
+        insert_at = 2 if len(eager_tools) >= 2 else len(eager_tools)
+        eager_tools.insert(insert_at, _TTSE_CONSULT_TOOL_NAME)
+    return eager_tools
+
+
+def _strip_whitespace(text: str) -> str:
+    """Whitespace-free form used to compare two renderings of the same text.
+
+    Collapsing to a single space (the frontend's ``collapseWs``) is not enough
+    here: a round's answer re-wraps the streamed tokens, and CJK text has no
+    space at the point where a newline was inserted.
+    """
+    return re.sub(r"\s+", "", text or "")
+
+
+def _is_attach_only_subscription(params: Any) -> bool:
+    """Whether the request params describe a team attach-only subscription.
+
+    An attach-only ``chat.send`` is a passive event subscription: it submits
+    no input, creates no runtime, and runs no model.  Execution-scoped side
+    effects (model config checks, active-session marking, task reservation)
+    must skip it — otherwise a long-lived subscription keeps the session
+    marked as executing and blocks unrelated operations such as model
+    switches.
+    """
+    from jiuwenswarm.runtime.session.model import TEAM_ATTACH_ONLY_PARAM
+
+    return isinstance(params, dict) and params.get(TEAM_ATTACH_ONLY_PARAM) is True
+
+
+try:
+    from openjiuwen.harness.tools import is_paid_search_enabled
+except ImportError:  # Compatibility with older agent-core versions.
+    try:
+        from openjiuwen.harness.tools.web_tools import is_paid_search_enabled
+    except ImportError:
+
+        def is_paid_search_enabled() -> bool:
+            api_key_envs = (
+                "BOCHA_API_KEY",
+                "PERPLEXITY_API_KEY",
+                "SERPER_API_KEY",
+                "JINA_API_KEY",
+            )
+            for key in api_key_envs:
+                if str(os.environ.get(key, "") or "").strip():
+                    return True
+            return False
+
+
+# Goal 用户历史：忙碌插队时先挂起，等上一轮→goal 边界（或流结束）再落盘，
+# 时间戳与 live「答完再入列」对齐。按 session 暂存，跨同 session 的并发 stream 共享。
+_pending_goal_objective_history: dict[str, dict[str, Any]] = {}
+
+
+create_deep_agent = harness_factory.create_deep_agent
 load_dotenv_runtime(dotenv_path=get_env_file(), override=True)
 apply_free_search_runtime_defaults()
 TodoModifyTool = CompatibleTodoModifyTool
@@ -929,6 +954,335 @@ def _permission_user_text_for_request(request: AgentRequest) -> str:
 
 
 logger = logging.getLogger(__name__)
+
+# AgentSSAS backend 异步初始化 Task 的强引用集合:
+# asyncio Task 仅被弱引用持有, 未保存引用可能被 GC 中途销毁;
+# done callback 负责: 1) 从集合移除已完成 Task  2) 记录初始化异常(否则异常静默丢失)
+_SSAS_INIT_TASKS: "set[asyncio.Task[None]]" = set()
+# 集合可能被不同线程的事件循环并发增删(实例创建/team member 装配等路径),
+# 遍历前须持锁快照, 避免 "Set changed size during iteration"。
+# 用 RLock: 竞态落败路径在临界区内调用 _close_ssas_backend_in_background,
+# 后者需再入同一线程的锁登记 close Task, 非重入锁会自锁死
+_SSAS_INIT_TASKS_LOCK = threading.RLock()
+# 收口等待上界(秒): 实例创建为同步契约路径, 上界即用户首请求时延天花板;
+# 初始化是 in-process 本地操作(模块加载 + 单次启动 TTL 清理), 正常亚秒级
+# 完成, 5s 覆盖慢盘/冷启动余量即可。超时告警后放行(fail-open), 后续事件
+# 由 backend 的 _ensure_initialized 兜底等待, 安全感知仅延迟就绪不丢失
+_SSAS_INIT_WAIT_TIMEOUT: float = 5.0
+# 初始化 Task -> (缓存键, backend) 反查表: 初始化失败/收口超时时剔除缓存
+# 条目, 让下次装配重建 backend 并重试(自愈), 而非永远复用未就绪实例;
+# 与 _SSAS_INIT_TASKS 同锁保护, done callback 中随 Task 一并清理
+_SSAS_INIT_TASK_KEYS: "dict[asyncio.Task[None], tuple[tuple[Any, str], Any]]" = {}
+# 竞态落败/已关闭循环条目清扫的 backend 后台 close Task 强引用集
+# (防 GC 中途销毁); done callback 中自动移出, 与 _SSAS_INIT_TASKS 同锁保护
+_SSAS_CLOSE_TASKS: "set[asyncio.Task[None]]" = set()
+# rail 装配可能运行在 worker 线程(asyncio.to_thread), 该线程既没有运行中的
+# 事件循环, loop.create_task 也不保证线程安全。worker 线程只登记待派发条目
+# (缓存键, backend), 由事件循环线程在装配收口处调用 _dispatch_ssas_init_tasks
+# 完成真正的初始化 Task 派发; 与 _SSAS_INIT_TASKS 同锁保护
+_SSAS_PENDING_INIT: "list[tuple[tuple[Any, str], Any]]" = []
+
+
+def _log_ssas_close_result(task: "asyncio.Task[None]") -> None:
+    """竞态落败/已关闭循环清扫 backend 的后台 close 完成回调: 移除引用并记录异常."""
+    with _SSAS_INIT_TASKS_LOCK:
+        _SSAS_CLOSE_TASKS.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning("[JiuWenSwarmDeepAdapter] AgentSSAS backend background close failed: %s", exc)
+
+
+def _close_ssas_backend_in_fresh_loop(close: Any) -> None:
+    """在独立线程内以全新事件循环执行 backend close(同步入口, 供 to_thread).
+
+    backend 构造期即建立 SQLite 连接等同步资源, 不随其所属事件循环销毁
+    释放; 已关闭循环条目的 close 无法派发到原循环, 改在独立线程的全新
+    循环中执行释放。已知限制: 真实 backend 的 close() 首行会取消周期
+    清理 Task, 若该 Task 绑定在已关闭循环上且已挂起, cancel 会经已关闭
+    循环的 call_soon 调度回调并抛 RuntimeError, 阻断后续 SQLite 同步
+    资源释放——该场景按降级路径处理: 捕获 RuntimeError 输出明确告警,
+    释放链留待 agent-ssas 侧同步释放入口 close_nowait() 落地后由本分支
+    改调（待上游接口可用后切换）, 不再让异常经 to_thread 冒泡成泛化告警。
+    """
+    try:
+        asyncio.run(close())
+    except RuntimeError as exc:
+        # 降级路径: 死循环绑定对象触发的已知根因, 非本层缺陷;
+        # Switch to synchronous release when upstream exposes close_nowait.
+        logger.warning(
+            "[JiuWenSwarmDeepAdapter] AgentSSAS backend close 在全新循环内"
+            "触达已关闭循环绑定的 asyncio 对象, 本次释放降级放弃"
+            "(等待上游 agent-ssas 提供同步释放入口 close_nowait): %s",
+            exc,
+        )
+
+
+def _close_ssas_backend_in_background(
+    backend: Any,
+    backend_loop: asyncio.AbstractEventLoop,
+    dispatch_loop: asyncio.AbstractEventLoop | None = None,
+) -> None:
+    """后台关闭竞态落败/已关闭循环清扫的 backend, 防 SQLite 连接等资源泄漏.
+
+    仅用于无持有者的 backend: 双检锁竞态落败的 candidate 从未入缓存、
+    已关闭循环条目清扫前已 pop 出缓存, 两者都不会被 rail 代理持有或
+    缓存复用, 不关闭的话重复并发装配会持续累积泄漏(SQLite 连接 fd
+    耗尽、Windows 上 WAL 文件句柄锁定), 故经本通道关闭: close Task
+    强引用存入 _SSAS_CLOSE_TASKS(防 GC 中途销毁), done callback
+    (_log_ssas_close_result)记录异常并移出。初始化失败/收口超时剔除的
+    backend 可能已被 rail 持有且可由 _ensure_initialized 自愈, 不走
+    本通道(见 _log_ssas_init_result/_await_ssas_init_tasks)。close 经
+    getattr 防御获取; backend 所属循环已关闭时, close 无法派发到原
+    循环, 改经 to_thread 在独立线程的全新事件循环中执行(见
+    _close_ssas_backend_in_fresh_loop), 保证循环生命周期之外的同步
+    资源同样被释放。close Task 登记在 dispatch_loop(缺省为当前线程的
+    运行循环); rail 装配运行在 worker 线程时该线程没有运行中的循环,
+    由调用方显式透传事件循环, 并经 call_soon_threadsafe 派发, 保证
+    跨线程登记安全; 若当前线程就是 dispatch_loop 的线程则就地 create_task
+    (与旧行为一致, 避免无谓延后一拍改变调用方的可观测时序)。
+    """
+    if backend is None:
+        return
+    close = getattr(backend, "close", None)
+    if close is None:
+        return
+    loop = dispatch_loop
+    if loop is None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # 无运行中事件循环且调用方未提供派发循环:
+            # 放弃后台关闭, 资源随进程退出由 OS 回收
+            return
+    try:
+        running_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+    if backend_loop.is_closed():
+        close_coro: Any = asyncio.to_thread(
+            _close_ssas_backend_in_fresh_loop, close
+        )
+    else:
+        close_coro = close()
+
+    def _register_close_task() -> None:
+        try:
+            close_task = loop.create_task(close_coro)
+        except RuntimeError:
+            # create_task 失败(循环已关闭等)时 close_coro 无人接管, 显式
+            # close 释放协程, 防 "coroutine was never awaited" RuntimeWarning
+            close_coro.close()
+            return
+        with _SSAS_INIT_TASKS_LOCK:
+            _SSAS_CLOSE_TASKS.add(close_task)
+        close_task.add_done_callback(_log_ssas_close_result)
+
+    if running_loop is loop:
+        # 已在目标循环线程: 就地登记, 保持调用方原本可观测的时序
+        _register_close_task()
+        return
+    try:
+        loop.call_soon_threadsafe(_register_close_task)
+    except RuntimeError:
+        # 循环已关闭, 回调不会执行: 释放协程防 RuntimeWarning
+        close_coro.close()
+
+
+def _log_ssas_init_result(task: "asyncio.Task[None]") -> None:
+    """AgentSSAS backend 初始化 Task 完成回调: 移除引用并记录异常."""
+    with _SSAS_INIT_TASKS_LOCK:
+        _SSAS_INIT_TASKS.discard(task)
+        entry = _SSAS_INIT_TASK_KEYS.pop(task, None)
+        if task.cancelled():
+            logger.warning("[JiuWenSwarmDeepAdapter] AgentSSAS backend init task cancelled")
+            _evict_ssas_backend_locked(entry)
+        else:
+            exc = task.exception()
+            if exc is not None:
+                logger.warning("[JiuWenSwarmDeepAdapter] AgentSSAS backend init failed: %s", exc)
+                _evict_ssas_backend_locked(entry)
+    # 初始化失败/被取消的 backend 仅剔除缓存、不主动关闭: 它可能已被
+    # 本次装配的 rail 经代理持有, 且 report_event 入口的
+    # _ensure_initialized 兜底会在后续事件上自愈重试初始化, 后台关闭
+    # 会与该兜底及已装配 rail 竞态(事件打到已关闭对象)。backend 生命周期
+    # 本为进程级(见 _SSAS_BACKEND_CACHE), 同步资源随进程退出回收;
+    # 剔除后缓存不复用, 不构成无界泄漏
+
+
+def _evict_ssas_backend_locked(
+    entry: "tuple[tuple[Any, str], Any] | None",
+) -> None:
+    """剔除初始化失败/超时的 backend 缓存条目(须持 _SSAS_INIT_TASKS_LOCK).
+
+    backend 在 initialize() 完成前即入缓存(装配与初始化解耦, 由收口点
+    统一等待); 若初始化失败或收口超时的 backend 留在缓存中, 复用分支会
+    一直复用这个永远不会就绪的实例, 安全感知静默失效。剔除后下一次装配
+    重建 backend 并重新派发初始化(自愈); 已有 rail 经代理持有的旧 backend
+    引用仍有效, 其事件由 backend report_event 入口的 _ensure_initialized
+    兜底。缓存条目被并发替换为其它 backend 时不误剔(按对象同一性校验)。
+    """
+    if entry is None:
+        return
+    backend_key, backend = entry
+    if _SSAS_BACKEND_CACHE.get(backend_key) is backend:
+        _SSAS_BACKEND_CACHE.pop(backend_key, None)
+
+
+async def _await_ssas_init_tasks() -> None:
+    """等待 AgentSSAS backend 初始化 Task 完成(有界等待, fail-open).
+
+    rail 构建链路是同步契约, 无法直接 await initialize(), 只能 fire-and-forget
+    派发 Task(见 _build_ssas_rail); 本函数在 rail 列表构建完成后统一收口,
+    保证 rail 进入 agent 实例前 backend 已完成初始化, 消除"rail 已注册但
+    backend 未就绪"的窗口期。初始化异常已由 done callback 记录并告警,
+    此处不再上抛, 保持 fail-open 语义。
+
+    防御约束:
+    - 持锁快照避免并发增删触发 RuntimeError; 仅等待当前事件循环的 Task,
+      跨循环等待会抛 RuntimeError 且各循环路径由自己的收口点负责;
+    - asyncio.wait 带超时上界, 避免初始化挂死无限阻塞实例创建;
+      超时仅告警并放行, 后续首个事件仍由 backend report_event 入口的
+      _ensure_initialized 兜底等待(等待而非丢弃);
+    - 超时剔除仅取消挂死 Task 并剔除缓存条目, 不主动关闭 backend:
+      它可能已被本次装配的 rail 持有, 且可能恰在超时判定后自行完成
+      初始化, 关闭会与 _ensure_initialized 兜底及事件上报竞态; backend
+      生命周期为进程级, 剔除后缓存不复用, 不构成无界泄漏。
+    """
+    loop = asyncio.get_running_loop()
+    with _SSAS_INIT_TASKS_LOCK:
+        pending = [
+            task
+            for task in _SSAS_INIT_TASKS
+            if not task.done() and task.get_loop() is loop
+        ]
+    if not pending:
+        return
+    _done, still_pending = await asyncio.wait(
+        pending, timeout=_SSAS_INIT_WAIT_TIMEOUT
+    )
+    if still_pending:
+        logger.warning(
+            "[JiuWenSwarmDeepAdapter] AgentSSAS backend init wait timeout after "
+            "%ss (tasks=%d), fail-open and let backend._ensure_initialized backstop",
+            _SSAS_INIT_WAIT_TIMEOUT,
+            len(still_pending),
+        )
+        # 超时剔除: 挂死 Task 移出跟踪集、取消执行并剔除对应缓存条目。
+        # 不移出的话, 后续每次 create_instance 收口都会对同一挂死 Task
+        # 重复等满整个上界; 不取消的话, Task 与其 backend 引用会永久滞留
+        # (泄漏); 剔除缓存后, 下次装配重建 backend 并重新初始化(自愈);
+        # 已装配 rail 的事件由 _ensure_initialized 兜底。剔除条目不主动
+        # 关闭: 挂死 backend 可能恰在超时判定后自行完成初始化并由兜底
+        # 接管, 关闭会与其竞态; backend 生命周期为进程级, 剔除后缓存
+        # 不复用, 不构成无界泄漏。取消触发 done callback(cancelled 分支),
+        # 其中 discard/pop/剔除均为幂等空操作, 安全。
+        with _SSAS_INIT_TASKS_LOCK:
+            for task in still_pending:
+                _SSAS_INIT_TASKS.discard(task)
+                entry = _SSAS_INIT_TASK_KEYS.pop(task, None)
+                _evict_ssas_backend_locked(entry)
+                task.cancel()
+
+
+def _dispatch_ssas_init_tasks(loop: asyncio.AbstractEventLoop) -> None:
+    """把 worker 线程登记的 backend 初始化在事件循环线程派发为 Task.
+
+    rail 装配链路可能运行在 worker 线程(asyncio.to_thread): 那里既没有运行中
+    的事件循环, 也不保证 loop.create_task 的线程安全, 因此由 _build_ssas_rail
+    登记待派发条目, 再由本函数在装配收口处(事件循环线程)真正派发初始化 Task
+    并纳入 _SSAS_INIT_TASKS 跟踪, 供 _await_ssas_init_tasks 统一等待。
+
+    防御约束(均为 fail-open, 不阻断装配):
+    - 只取走缓存键首元素正是本循环的条目, 其它循环的条目留给各自的收口点;
+    - 所属循环已关闭的条目无从派发, 直接剔除缓存条目(下次装配重建, 自愈);
+    - 派发失败(循环正在关闭等)同样剔除缓存条目并告警, 不向装配链路抛异常。
+
+    Args:
+        loop: 拥有这些 backend 的事件循环, 即当前装配所在的运行循环。
+    """
+    ready: "list[tuple[tuple[Any, str], Any]]" = []
+    with _SSAS_INIT_TASKS_LOCK:
+        retained: "list[tuple[tuple[Any, str], Any]]" = []
+        for entry in _SSAS_PENDING_INIT:
+            backend_loop = entry[0][0]
+            if backend_loop is loop:
+                ready.append(entry)
+            elif backend_loop.is_closed():
+                _evict_ssas_backend_locked(entry)
+            else:
+                retained.append(entry)
+        _SSAS_PENDING_INIT[:] = retained
+    for backend_key, backend in ready:
+        try:
+            init_task = loop.create_task(backend.initialize())
+        except Exception as exc:
+            with _SSAS_INIT_TASKS_LOCK:
+                _evict_ssas_backend_locked((backend_key, backend))
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] AgentSSAS backend init dispatch failed: %s",
+                exc,
+            )
+            continue
+        with _SSAS_INIT_TASKS_LOCK:
+            _SSAS_INIT_TASKS.add(init_task)
+            _SSAS_INIT_TASK_KEYS[init_task] = (backend_key, backend)
+        init_task.add_done_callback(_log_ssas_init_result)
+
+
+# AgentSSAS backend 进程级复用缓存: create_instance 会被 reload/权限隔离/
+# 逐 agent 创建反复触发, 无复用时每次新建 inprocess backend(独立 SQLite
+# 连接 + 重复检测模块加载 + 重复周期清理任务)。键为(事件循环对象, ssas 配置
+# 指纹)——持 loop 对象强引用, 避免用 id(loop) 在旧循环被 GC 后发生 id 复用、
+# 新循环误用绑定在已死循环上的 backend; 不同事件循环不共享(asyncio.Lock
+# 等资源绑定循环)。backend 生命周期为进程级, 随进程退出由 OS 回收, 不随
+# 单个 rail 卸载关闭(AgentSSAS 侧后续迭代提供共享 backend 工厂与显式释放后
+# 替换此实现)。
+_SSAS_BACKEND_CACHE: "dict[tuple[Any, str], Any]" = {}
+# 缓存条目上界: 防御多事件循环进程(测试套件每个用例新建循环等)无界
+# 增长; 查找时先清理已关闭循环的条目, 仍超上界则淘汰最旧条目(已装配
+# rail 经代理持有的引用不受影响, 见 _build_ssas_rail)
+_SSAS_BACKEND_CACHE_MAX = 16
+
+
+class _SharedSSASBackendProxy:
+    """共享 backend 代理: 全量委托目标 backend, 资源释放入口拦截为 no-op。
+
+    AgentSSASSecurityRail 的全部释放入口最终都收敛到 backend.close():
+    - uninit(agent) -> ensure_future(self.close())(rail 源码 uninit 钩子);
+    - rail.close()  -> close = getattr(self._backend, "close", None) -> await close()。
+    rail 持有的 _backend 即本代理, getattr 命中下方 no-op close, 因此 rail
+    卸载(uninit/close 两条路径)均不会关闭共享 backend, 否则其余 rail 的事
+    件会打到已关闭的 backend; 生命周期由此提升到进程级(与 inprocess 模式
+    "backend 与宿主同生命周期"的定位一致)。其余属性/方法经 __getattr__ 按
+    需委托目标 backend, 不覆写任何具体方法, 不收窄上游签名。
+    """
+
+    def __init__(self, backend: Any) -> None:
+        self._ssas_backend = backend
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._ssas_backend, name)
+
+    async def close(self) -> None:
+        """no-op: 共享 backend 不随单个 rail 卸载关闭, 见类 docstring。"""
+
+
+def _ssas_backend_fingerprint(ssas_cfg: dict[str, Any]) -> str:
+    """计算共享 backend 的 ssas 配置指纹(键排序稳定, 排除 rail 级旋钮)。
+
+    enabled/rail_priority/decision_policy 只影响 rail 装配不影响 backend,
+    排除后调节这些旋钮不会不必要地新建 backend。
+    """
+    rail_level_keys = {"enabled", "rail_priority", "decision_policy"}
+    fingerprint_src = {
+        key: value for key, value in ssas_cfg.items() if key not in rail_level_keys
+    }
+    try:
+        return json.dumps(fingerprint_src, sort_keys=True, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return repr(sorted((key, repr(value)) for key, value in fingerprint_src.items()))
 
 
 def _reset_context_variable(variable: ContextVar[Any], token: Token[Any]) -> None:
@@ -1282,6 +1636,142 @@ class _RailBuildInfo:
     def __post_init__(self):
         """Normalize the optional params mapping to an empty dict."""
         self.params = self.params or {}
+
+
+_AGENT_BUILD_CONCURRENCY = 1
+_AGENT_BUILD_SLOTS: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, weakref.ReferenceType[asyncio.Semaphore]
+] = weakref.WeakKeyDictionary()
+
+
+def _agent_build_slots() -> asyncio.Semaphore:
+    """Return the per-event-loop slot protecting shared agent registries."""
+    loop = asyncio.get_running_loop()
+    reference = _AGENT_BUILD_SLOTS.get(loop)
+    slots = reference() if reference is not None else None
+    if slots is None:
+        slots = asyncio.Semaphore(_AGENT_BUILD_CONCURRENCY)
+        _AGENT_BUILD_SLOTS[loop] = weakref.ref(slots)
+    return slots
+
+
+@asynccontextmanager
+async def _agent_build_registry_guard() -> AsyncIterator[None]:
+    """Serialize worker-side mutations of shared agent registries."""
+    slots = _agent_build_slots()
+    await slots.acquire()
+    try:
+        yield
+    finally:
+        slots.release()
+
+
+class _PersistentAgentEventLoop:
+    """Run one agent's async initialization on a long-lived worker loop."""
+
+    def __init__(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        self._closed = threading.Event()
+        self._close_lock = threading.Lock()
+        self._close_requested = False
+        self._thread = threading.Thread(
+            target=self._run,
+            name="deep-agent-initialization",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        try:
+            self._loop.run_forever()
+        finally:
+            try:
+                pending = asyncio.all_tasks(self._loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    self._loop.run_until_complete(
+                        asyncio.gather(*pending, return_exceptions=True)
+                    )
+                self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+                self._loop.run_until_complete(self._loop.shutdown_default_executor())
+            finally:
+                self._loop.close()
+                self._closed.set()
+
+    def is_closed(self) -> bool:
+        """Return whether the worker loop has been closed."""
+        return self._closed.is_set() or self._loop.is_closed()
+
+    def is_running(self) -> bool:
+        """Return whether the worker loop is currently servicing tasks."""
+        return self._loop.is_running() and not self.is_closed()
+
+    async def run(self, coroutine: Coroutine[Any, Any, Any]) -> Any:
+        """Run a coroutine on the worker loop and preserve caller cancellation."""
+        if self.is_closed():
+            coroutine.close()
+            raise RuntimeError("agent initialization loop is closed")
+        try:
+            worker_future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+        except BaseException:
+            coroutine.close()
+            raise
+
+        task = asyncio.wrap_future(worker_future)
+        cancelled: asyncio.CancelledError | None = None
+        while True:
+            try:
+                result = await asyncio.shield(task)
+                break
+            except asyncio.CancelledError as exc:
+                if task.cancelled():
+                    raise
+                cancelled = exc
+        if cancelled is not None:
+            raise cancelled
+        return result
+
+    async def close(self) -> None:
+        """Stop the worker loop after its owner has finished cleanup."""
+        with self._close_lock:
+            if self.is_closed():
+                return
+            if not self._close_requested:
+                self._close_requested = True
+                self._loop.call_soon_threadsafe(self._loop.stop)
+        await asyncio.to_thread(self._closed.wait)
+        self._thread.join()
+
+
+async def _run_history_io_with_result(
+    fn: Callable[..., Any],
+    *args: Any,
+    on_result: Callable[[Any], None],
+    **kwargs: Any,
+) -> Any:
+    """Run sync work off-loop and publish its result before cancellation."""
+    task = asyncio.create_task(asyncio.to_thread(fn, *args, **kwargs))
+    cancelled: asyncio.CancelledError | None = None
+    while True:
+        try:
+            result = await asyncio.shield(task)
+            break
+        except asyncio.CancelledError as exc:
+            if task.cancelled():
+                raise
+            cancelled = exc
+    on_result(result)
+    if cancelled is not None:
+        raise cancelled
+    return result
+
+
+def _load_instance_config_sync() -> dict[str, Any]:
+    """Load the instance environment and configuration off the event loop."""
+    load_dotenv_runtime(dotenv_path=get_env_file(), override=True)
+    return get_config()
 
 
 _CRON_TOOL_NAMES = frozenset(
@@ -2232,6 +2722,8 @@ class JiuWenSwarmDeepAdapter:
         self._personal_context_rail: PersonalContextRail | None = None
         self._personal_context_rail_lock = asyncio.Lock()
         self._security_rail: SecurityRail | None = None
+        # AgentSSAS: 安全态势感知 Rail
+        self._ssas_rail: "AgentSSASSecurityRail | None" = None
         self._memory_rail: MemoryRail | None = None
         self._external_memory_rail: Any = None
         self._external_memory_rail_registered: bool = False
@@ -2287,6 +2779,7 @@ class JiuWenSwarmDeepAdapter:
         self._tool_cards = None
         self._evolution_watcher_tasks: set[asyncio.Task] = set()
         self._ttse_cleanup_tasks: set[asyncio.Task] = set()
+        self._agent_initialization_loop: _PersistentAgentEventLoop | None = None
         self._sys_operation = None
         self._sys_operation_card: SysOperationCard | None = None
         # Ids of the sys operations this adapter currently holds a reference on,
@@ -2890,7 +3383,7 @@ class JiuWenSwarmDeepAdapter:
         adapter.mark_as_session_scoped(session_id)
         # Inherit the channel id so the child's MCP load strategy matches the
         # parent's (TUI loads the global set, web loads nothing on init).
-        adapter._channel_id = getattr(self, "_channel_id", "")
+        adapter._channel_id = getattr(self, "_channel_id", "")  # pylint: disable=protected-access
         # Parent and child are instances of this class and share cron context.
         adapter._is_cron_execution = self._is_cron_execution  # pylint: disable=protected-access
         adapter.set_personal_context_runtime_enabled(
@@ -4328,7 +4821,7 @@ class JiuWenSwarmDeepAdapter:
             set(pending_mcp_scan_names) if pending_mcp_scan_names is not None else None
         )
         lock = self._session_adapter_locks.setdefault(sid, asyncio.Lock())
-        async with lock:
+        async with serialize_adapter_assembly(lock) as (prior_limit, assembly):
             from jiuwenswarm.runtime.app_role import app_role_instructions, is_app_role_team, validate_app_role_member
             from jiuwenswarm.server.runtime.session.session_metadata import get_session_metadata
 
@@ -4811,7 +5304,9 @@ class JiuWenSwarmDeepAdapter:
                 config["moa_config_snapshot"] = moa_snapshot
                 config["moa_can_access"] = moa_can_access
             history_preparation = None
-            if history_before_request_id:
+            if history_before_request_id and (
+                prior_limit is None or prior_limit.before_request_id != history_before_request_id
+            ):
                 from jiuwenswarm.agents.harness.common.session_ops_service import prefetch_session_history
                 history_preparation = asyncio.create_task(run_history_io(
                     prefetch_session_history, sid, history_before_request_id=history_before_request_id,
@@ -4879,6 +5374,7 @@ class JiuWenSwarmDeepAdapter:
                         deep_agent=getattr(adapter, "_instance", None),
                         session_id=sid,
                         history_before_request_id=history_before_request_id,
+                        **({"prior_limit": prior_limit} if prior_limit is not None else {}),
                         **(
                             {"history_snapshot": history_snapshot}
                             if history_snapshot is not None
@@ -4916,6 +5412,8 @@ class JiuWenSwarmDeepAdapter:
                     if self._session_adapters.get(sid) is adapter:
                         self._session_adapters.pop(sid, None)
                     await adapter.cleanup()
+                if isinstance(exc, LegacyGroupLimit):
+                    assembly.source = exc.source
                 raise
             finally:
                 await self._drain_history_preparation(history_preparation)
@@ -5004,7 +5502,7 @@ class JiuWenSwarmDeepAdapter:
     def _mark_session_active(self, session_id: str) -> None:
         """Increment the active-task count for *session_id*."""
         sid = self._resolve_interrupt_session_id(session_id)
-        # TODO(compact): Connect the native busy gate only after main-flow integration is approved.
+        # Native compaction: Connect the native busy gate only after main-flow integration is approved.
         # from jiuwenswarm.extensions_v2.assembly import get_compaction_service
         # compact = get_compaction_service()
         # if compact is not None and compact.is_compacting(sid):
@@ -5024,7 +5522,7 @@ class JiuWenSwarmDeepAdapter:
         count = self._active_session_ids.get(sid, 0)
         if count <= 1:
             self._active_session_ids.pop(sid, None)
-            # TODO(compact): Do not schedule extension precompute from native task completion yet.
+            # Native compaction: Do not schedule extension precompute from native task completion yet.
             # from jiuwenswarm.extensions_v2.assembly import get_compaction_service
             # compact = get_compaction_service()
             # if compact is not None:
@@ -6087,23 +6585,44 @@ class JiuWenSwarmDeepAdapter:
                 for rail in self._general_purpose_rail_snapshot
             ]
         self._general_purpose_rail_snapshot = tuple(self._general_purpose_rails(candidates, smart=smart))
-        return _with_general_purpose_max_iterations(
-            _inject_general_purpose_subagent(
-                subagents,
-                add_general_purpose_agent=allow_general and add_general,
-                resolved_language=workspace.language,
-                rails=list(self._general_purpose_rail_snapshot),
-                system_prompt=build_agent_identity_prompt(
+        effective_subagents = list(subagents or [])
+        has_general_purpose = any(
+            (
+                isinstance(spec, SubAgentConfig)
+                and spec.agent_card.name == "general-purpose"
+            )
+            or getattr(getattr(spec, "card", None), "name", None) == "general-purpose"
+            for spec in effective_subagents
+        )
+        if allow_general and add_general and not has_general_purpose:
+            builder = getattr(harness_factory, "build_general_purpose_agent_config", None)
+            builder_kwargs = {
+                "resolved_language": workspace.language,
+                "rails": list(self._general_purpose_rail_snapshot),
+                "system_prompt": build_agent_identity_prompt(
                     language=self._resolve_prompt_language(),
                 ),
-                tools=list(tools),
-                mcps=None,
-                model=model,
-                skills=None,
-                workspace=workspace,
-                sys_operation=sys_operation,
-            )
-            or None,
+                "tools": list(tools),
+                "mcps": None,
+                "model": model,
+                "skills": None,
+                "workspace": workspace,
+                "sys_operation": sys_operation,
+            }
+            if callable(builder):
+                effective_subagents.insert(0, builder(**builder_kwargs))
+            else:
+                # Older agent-core revisions do not expose the public builder;
+                # retain their existing static injector for legacy mode.
+                from openjiuwen.harness.factory import _inject_general_purpose_subagent
+
+                effective_subagents = _inject_general_purpose_subagent(
+                    effective_subagents,
+                    add_general_purpose_agent=True,
+                    **builder_kwargs,
+                )
+        return _with_general_purpose_max_iterations(
+            effective_subagents or None,
             config,
         )
 
@@ -6819,16 +7338,16 @@ class JiuWenSwarmDeepAdapter:
         applied_any = False
         first_error: str = ""
         for adapter in self._iter_mcp_target_adapters():
-            if adapter._instance is None:
+            if adapter._instance is None:  # pylint: disable=protected-access
                 continue
             already = any(
                 str(getattr(cfg, "server_name", "") or "").strip() == name
-                for _sid, cfg in adapter._registered_mcp_servers.items()
+                for _sid, cfg in adapter._registered_mcp_servers.items()  # pylint: disable=protected-access
             )
             if already:
                 applied_any = True
                 continue
-            cfg = adapter._build_mcp_server_config(entry)
+            cfg = adapter._build_mcp_server_config(entry)  # pylint: disable=protected-access
             if cfg is None:
                 logger.warning(
                     "[JiuWenSwarmDeepAdapter] register_mcp_by_name: '%s' invalid entry (adapter=%s)",
@@ -6879,12 +7398,12 @@ class JiuWenSwarmDeepAdapter:
         """
         removed_any = False
         for adapter in self._iter_mcp_target_adapters():
-            if adapter._instance is None:
+            if adapter._instance is None:  # pylint: disable=protected-access
                 continue
-            for server_id, cfg in list(adapter._registered_mcp_servers.items()):
+            for server_id, cfg in list(adapter._registered_mcp_servers.items()):  # pylint: disable=protected-access
                 if str(getattr(cfg, "server_name", "") or "").strip() == name:
                     try:
-                        await adapter._unregister_mcp_server(server_id)
+                        await adapter._unregister_mcp_server(server_id)  # pylint: disable=protected-access
                         removed_any = True
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(
@@ -6975,8 +7494,9 @@ class JiuWenSwarmDeepAdapter:
         first session-child creation point, it also forwards the current
         request's disk-history boundary into context warmup.
 
-        In enterprise mode, the routed Agent's enabled MCP templates replace
-        the per-message selection when an execution request is available.
+        In enterprise mode, enabled MCP names from the routed Agent policy are
+        unioned with ``needed`` (marketplace / extension-panel selection), not
+        used as a replacement.
         """
         if (
             runtime_binding is not None
@@ -7004,17 +7524,25 @@ class JiuWenSwarmDeepAdapter:
             **({"moa_can_access": moa_can_access} if moa_can_access is not None else {}),
             **({"retain_moa_snapshot": True} if retain_moa_snapshot else {}),
         )
-        # Enterprise Web has no per-message MCP picker. Resolve the current
-        # routed Agent's enabled templates before name lookup/registration.
-        # Never write these entries into the shared YAML or marketplace state.
+        # Enterprise: refresh the routed Agent policy cache, then union template
+        # MCPs with the per-message / marketplace selection (chat.send ``mcp`` /
+        # session equipment). Do not replace the picker set — connector market
+        # and the session extension panel must still mount. Never write these
+        # template entries into shared YAML or marketplace state.
         from jiuwenswarm.enterprise.config.config_provider import (
             ConfigSource, resolve_config_source,
         )
         if execution_request is not None and resolve_config_source() == ConfigSource.ENTERPRISE:
             enterprise_names = await child.load_enterprise_mcp_names(execution_request)
             if enterprise_names is not None:
-                needed_set = enterprise_names
-        if child._instance is None:
+                needed_set = needed_set | enterprise_names
+                logger.info(
+                    "[EnterpriseMCPReconcile] session=%s template=%s total=%s",
+                    session_id,
+                    len(enterprise_names),
+                    len(needed_set),
+                )
+        if child._instance is None:  # pylint: disable=protected-access
             pending_holder = getattr(
                 child,
                 "_pending_skill_scan_mcp_names",
@@ -7023,7 +7551,7 @@ class JiuWenSwarmDeepAdapter:
             if isinstance(pending_holder, set):
                 pending_holder.clear()
             return
-        selected = child._session_selected_mcp
+        selected = child._session_selected_mcp  # pylint: disable=protected-access
         pending_scan_names = set(
             getattr(child, "_pending_skill_scan_mcp_names", set())
         )
@@ -11020,7 +11548,7 @@ class JiuWenSwarmDeepAdapter:
             selected.update(
                 getattr(self, "_pending_skill_scan_mcp_names", set()) or ()
             )
-            for entry in self._skill_manager._mcp_skills_dirs():
+            for entry in self._skill_manager._mcp_skills_dirs():  # pylint: disable=protected-access
                 if str(entry.get("name", "")).strip() not in selected:
                     continue
                 d = str(entry.get("dir", "") or "").strip()
@@ -11579,6 +12107,10 @@ class JiuWenSwarmDeepAdapter:
                 cua_agent_enabled=is_cua_agent_enabled(
                     subagents_cfg.get("cua_agent") if isinstance(subagents_cfg, dict) else None
                 ),
+                symphony_tasks_enabled=(
+                    None if is_team_mode(getattr(self, "_session_instance_mode", "agent"))
+                    else lambda: SymphonyToolkit.is_enabled(getattr(self, "_config_base_cache", None) or config_base)
+                ),
             )
             logger.info(
                 "[JiuWenSwarmDeepAdapter] SubagentRail create success "
@@ -11610,6 +12142,185 @@ class JiuWenSwarmDeepAdapter:
             logger.warning("[JiuWenSwarmDeepAdapter] SecurityPromptRail create failed: %s", exc)
             security_prompt_rail = None
         return security_prompt_rail
+
+    @staticmethod
+    def _build_ssas_rail(
+        config_base: dict[str, Any] | None = None,
+        *,
+        event_loop: asyncio.AbstractEventLoop | None = None,
+    ) -> "AgentSSASSecurityRail | None":
+        """Build AgentSSASSecurityRail (AgentSSAS 安全态势感知).
+
+        Args:
+            config_base: Base config mapping; resolved via ``get_config``
+                when omitted.
+            event_loop: Event loop owning the backend. Rail assembly may run
+                on a worker thread (``asyncio.to_thread``), so callers in
+                that path pass the loop explicitly; omitting it means the
+                current thread runs the loop.
+        """
+        if not _SSAS_AVAILABLE:
+            logger.info("[JiuWenSwarmDeepAdapter] AgentSSASSecurityRail not available (agent-ssas not installed)")
+            return None
+        try:
+            config_base = config_base or get_config()
+            ssas_cfg = config_base.get("ssas", {}) if isinstance(config_base, dict) else {}
+            if ssas_cfg.get("enabled", False) is not True:
+                logger.info("[JiuWenSwarmDeepAdapter] AgentSSASSecurityRail disabled by config")
+                return None
+            ssas_config = AgentSSASConfig.from_dict(ssas_cfg)
+            # 同步创建 backend: INPROCESS 模式直接构造 + initialize; 复用见下方缓存
+            from agent_ssas.core.framework.access_adapter.agent_backend import AgentSSASBackend
+            from agent_ssas.core.framework.access_adapter.agent_remote_backend import AgentSSASRemoteBackend
+            from agent_ssas.core.framework.config.settings import AgentSSASMode
+            # backend 进程级复用: 同一(事件循环, ssas 配置指纹)内 reload/
+            # 逐 agent 创建/team member 装配共享同一 backend, 避免每次装配
+            # 新建 SQLite 连接与重复初始化; 共享 backend 经 _SharedSSASBackendProxy
+            # 交给 rail, 防止单个 rail 卸载时关闭其余 rail 仍在使用的 backend。
+            # worker 线程(asyncio.to_thread)无运行中的循环, get_running_loop
+            # 会抛 RuntimeError 并被外层 except 吞掉, 导致 rail 静默缺失;
+            # 该路径由调用方透传所属事件循环, 仅循环线程路径才就地获取。
+            loop = event_loop if event_loop is not None else asyncio.get_running_loop()
+            backend_key = (loop, _ssas_backend_fingerprint(ssas_cfg))
+            with _SSAS_INIT_TASKS_LOCK:
+                # 缓存治理: 清理已关闭循环的条目(该循环上的 backend 不会再
+                # 被复用), 以及滞留的挂死 init Task/反查表条目与 close Task
+                # (循环关闭后 Task 永不再执行, 强引用滞留会阻止其 backend
+                # 被 GC、令跟踪集无界增长);
+                # 清扫条目的 backend 不随循环销毁释放(SQLite 连接等同步资源
+                # 在循环生命周期之外), 收集后锁外统一后台关闭防泄漏;
+                # 缓存条目与反查表条目可能引用同一 backend, 按对象同一性
+                # 去重避免重复 close。确需新建时若达上界则淘汰最旧条目,
+                # 保证多循环进程有界增长
+                stale_close_pairs: "list[tuple[Any, asyncio.AbstractEventLoop]]" = []
+                stale_seen: "set[int]" = set()
+                for stale_key in [
+                    key for key in _SSAS_BACKEND_CACHE if key[0].is_closed()
+                ]:
+                    stale_backend = _SSAS_BACKEND_CACHE.pop(stale_key, None)
+                    if stale_backend is not None and id(stale_backend) not in stale_seen:
+                        stale_seen.add(id(stale_backend))
+                        stale_close_pairs.append((stale_backend, stale_key[0]))
+                for stale_task in [
+                    task
+                    for task in _SSAS_INIT_TASKS
+                    if task.get_loop().is_closed()
+                ]:
+                    _SSAS_INIT_TASKS.discard(stale_task)
+                    stale_entry = _SSAS_INIT_TASK_KEYS.pop(stale_task, None)
+                    if (
+                        stale_entry is not None
+                        and id(stale_entry[1]) not in stale_seen
+                    ):
+                        stale_seen.add(id(stale_entry[1]))
+                        stale_close_pairs.append((stale_entry[1], stale_entry[0][0]))
+                # close Task 同策略清扫(与 init Task 治理对称): 挂在已关闭
+                # 循环上的 close Task 永不再执行, 强引用滞留会令跟踪集随
+                # 多循环进程无界增长; 与 init 清扫一致仅 discard 不 cancel
+                # (已关闭循环无法调度 cancel 回调); 其目标 backend 的资源
+                # 释放无从推进, 由进程退出兜底
+                for stale_close_task in [
+                    task
+                    for task in _SSAS_CLOSE_TASKS
+                    if task.get_loop().is_closed()
+                ]:
+                    _SSAS_CLOSE_TASKS.discard(stale_close_task)
+                # 待派发条目同策略清扫: 所属循环已关闭的条目永远不会被
+                # 派发, 强引用滞留会阻止其 backend 被 GC 并令列表随多循环
+                # 进程无界增长; 其 backend 已随上面的缓存清扫收集关闭
+                _SSAS_PENDING_INIT[:] = [
+                    pending_entry
+                    for pending_entry in _SSAS_PENDING_INIT
+                    if not pending_entry[0][0].is_closed()
+                ]
+                shared_backend = _SSAS_BACKEND_CACHE.get(backend_key)
+            # 锁外后台释放已关闭循环条目的 backend(其 SQLite 连接等同步
+            # 资源不随循环销毁释放): 经独立线程全新事件循环执行 close,
+            # 防 fd 泄漏与 SQLite 文件锁滞留; 锁内仅收集登记, 关闭的
+            # 派发与调度不占装配锁
+            for stale_backend, stale_loop in stale_close_pairs:
+                _close_ssas_backend_in_background(stale_backend, stale_loop, loop)
+            backend_created = False
+            if shared_backend is None:
+                # 构造移出锁外: AgentSSASBackend 构造含 mkdir/sqlite 建库等
+                # 同步 I/O, 持锁构造会阻塞其它事件循环线程的装配与 done
+                # callback; 完成后双检锁插入, 兜底并发装配竞态
+                if ssas_config.mode == AgentSSASMode.HTTP:
+                    candidate: Any = AgentSSASRemoteBackend(ssas_config)
+                else:
+                    candidate = AgentSSASBackend(ssas_config)
+                with _SSAS_INIT_TASKS_LOCK:
+                    shared_backend = _SSAS_BACKEND_CACHE.get(backend_key)
+                    if shared_backend is None:
+                        while len(_SSAS_BACKEND_CACHE) >= _SSAS_BACKEND_CACHE_MAX:
+                            _SSAS_BACKEND_CACHE.pop(next(iter(_SSAS_BACKEND_CACHE)))
+                        _SSAS_BACKEND_CACHE[backend_key] = candidate
+                        shared_backend = candidate
+                        backend_created = True
+                    else:
+                        # 竞态落败: 保留赢家, 后台关闭多余 candidate 防
+                        # SQLite 连接等资源泄漏(close Task 强引用防 GC)
+                        _close_ssas_backend_in_background(candidate, loop, loop)
+            backend: Any = shared_backend
+            if backend_created:
+                # initialize() 是 async; builder 链路可能在事件循环线程,
+                # 也可能在 worker 线程(asyncio.to_thread)内执行。
+                # 在事件循环线程: fire-and-forget 派发初始化 Task 并保存
+                # 强引用(done callback 记录异常, 避免被 GC 中途销毁或异常
+                # 静默丢失), 随后由 _create_instance 统一 await 收口(见
+                # _await_ssas_init_tasks), 保证 rail 生效前 backend 完成
+                # 初始化。
+                # 在 worker 线程: 既无运行中的循环, create_task 也不保证
+                # 线程安全, 此处只登记待派发条目, 由 _create_instance 在
+                # 循环线程调用 _dispatch_ssas_init_tasks 完成派发。
+                # 复用路径不再派发: initialize 幂等, 已初始化的 backend
+                # 由首次装配收口保证; 异常态下 get_running_loop 抛出的
+                # RuntimeError 由外层 except 捕获, 告警并降级为不注册
+                # rail(fail-open)。
+                if event_loop is not None:
+                    with _SSAS_INIT_TASKS_LOCK:
+                        _SSAS_PENDING_INIT.append((backend_key, backend))
+                else:
+                    init_task = asyncio.get_running_loop().create_task(
+                        backend.initialize()
+                    )
+                    with _SSAS_INIT_TASKS_LOCK:
+                        _SSAS_INIT_TASKS.add(init_task)
+                        # 反查表供初始化失败/收口超时剔除缓存条目(自愈重试)
+                        _SSAS_INIT_TASK_KEYS[init_task] = (backend_key, backend)
+                    init_task.add_done_callback(_log_ssas_init_result)
+            else:
+                logger.info(
+                    "[JiuWenSwarmDeepAdapter] AgentSSASBackend reuse (cache size=%d)",
+                    len(_SSAS_BACKEND_CACHE),
+                )
+            rail = AgentSSASSecurityRail(
+                backend=_SharedSSASBackendProxy(backend),
+                policy_name=ssas_config.decision_policy,
+            )
+            # 消费配置旋钮 rail_priority: agent-core 按 priority 排序各事件的
+            # 回调链(higher=first)。rail 类默认 80(低于 PermissionInterruptRail
+            # 的 90, 保持"在其他安全 Rail 之后执行, 可观察前序 Rail 的决策"),
+            # 配置后在注册前覆盖实例级 priority, 使该旋钮真实生效。
+            rail_priority = ssas_cfg.get("rail_priority")
+            if rail_priority is not None:
+                try:
+                    rail.priority = int(rail_priority)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "[JiuWenSwarmDeepAdapter] invalid ssas.rail_priority %r, keep rail default 80",
+                        rail_priority,
+                    )
+            logger.info(
+                "[JiuWenSwarmDeepAdapter] AgentSSASSecurityRail create success, mode=%s, policy=%s, priority=%s",
+                ssas_config.mode,
+                ssas_config.decision_policy,
+                getattr(rail, "priority", 80),
+            )
+            return rail
+        except Exception as exc:
+            logger.warning("[JiuWenSwarmDeepAdapter] AgentSSASSecurityRail create failed: %s", exc)
+            return None
 
     # 重索引延时（秒）：embedding 配置变更后，延后这段时间再跑一次全量重索引。
     # 配合 _schedule_memory_reindex 的 debounce，连续改多次只在最后一次后跑一次。
@@ -12137,6 +12848,7 @@ class JiuWenSwarmDeepAdapter:
             return SymphonyOrchestrationRail(
                 config_base=lambda: self._config_base_cache,
                 automatic_skillpack_enabled=lambda: get_symphony_evolution_enabled(get_config()),
+                enable_expert_task_dispatch=not is_team_mode(getattr(self, "_session_instance_mode", "agent")),
                 skillpack_router=SkillPackRouter(
                     manager=lambda: self._skill_manager,
                     toolkit=lambda: self._get_or_create_skill_retrieval_toolkit(),
@@ -12374,8 +13086,19 @@ class JiuWenSwarmDeepAdapter:
         *,
         mode: str = "agent",
         composition_scope: str = "single_agent",
+        event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> list[Any]:
-        """Build DeepAgent rails consistently for cold start and hot reload."""
+        """Build DeepAgent rails consistently for cold start and hot reload.
+
+        Args:
+            config: Agent config mapping.
+            config_base: Base config mapping shared with rail builders.
+            mode: Agent mode name.
+            composition_scope: Rail composition scope.
+            event_loop: Event loop owning process-level resources; passed
+                through to rail builders when assembly runs off the loop
+                thread.
+        """
         permission_config = config_base.get("permissions", {})
         self._enable_auto_permission = self._auto_permission_enabled_for_config(
             permission_config, composition_scope=composition_scope,
@@ -12411,6 +13134,11 @@ class JiuWenSwarmDeepAdapter:
             _RailBuildInfo("_stream_event_rail", self._build_stream_event_rail),
             _RailBuildInfo("_task_planning_rail", self._build_task_planning_rail),
             _RailBuildInfo("_security_rail", self._build_security_rail),
+            _RailBuildInfo(
+                "_ssas_rail",
+                self._build_ssas_rail,
+                {"config_base": config_base, "event_loop": event_loop},
+            ),
             _RailBuildInfo(
                 "_model_anomaly_detection_rail",
                 self._build_model_anomaly_detection_rail,
@@ -12644,6 +13372,10 @@ class JiuWenSwarmDeepAdapter:
                 or self._session_instance_mode.startswith("agent")
             ),
         )
+        subagent_registration_plan = resolve_subagent_registration_plan(
+            configured_subagents,
+            event_names={"statusline-setup", "general-purpose", "browser_agent"},
+        )
         context_model_state = _ContextEngineModelState(
             full_config=config_base,
             model_name=getattr(getattr(model, "model_config", None), "model_name", ""),
@@ -12656,6 +13388,12 @@ class JiuWenSwarmDeepAdapter:
         )
         kv_cache_affinity_config = _deep_agent_kv_cache_affinity_config(config_base, model)
         self._kv_cache_affinity_enabled = kv_cache_affinity_config.enable_kv_cache_affinity
+        subagent_kwargs: dict[str, Any] = {}
+        if subagent_registration_plan.mode == "event":
+            subagent_kwargs = {
+                "subagent_registration_mode": "event",
+                "event_subagent_configs": subagent_registration_plan.event_subagents,
+            }
         return DeepAgentConfig(
             model=model,
             moa=self._moa_runtime.config if self._moa_runtime is not None else None,
@@ -12669,7 +13407,7 @@ class JiuWenSwarmDeepAdapter:
             enable_task_loop=self._resolve_enable_task_loop(config, config_base),
             enable_subagent_runtime=self._resolve_enable_subagent_runtime(config_base),
             max_iterations=parse_optional_int(config.get("max_iterations")),
-            subagents=configured_subagents,
+            subagents=subagent_registration_plan.static_subagents,
             add_general_purpose_agent=False,
             tools=normalized_tool_cards,
             workspace=workspace_obj,
@@ -12687,6 +13425,7 @@ class JiuWenSwarmDeepAdapter:
             audio_model_config=self._audio_model_config,
             enable_read_image_multimodal=self._resolve_enable_read_image_multimodal(config),
             completion_timeout=resolve_task_loop_completion_timeout(config),
+            **subagent_kwargs,
         )
 
     @staticmethod
@@ -13468,7 +14207,44 @@ class JiuWenSwarmDeepAdapter:
                 self._tool_cards.append(tool.card)
 
     async def _get_tool_cards(self, agent_id: str):
-        """Get tool cards."""
+        """Build tool cards outside the event loop."""
+        async with _agent_build_registry_guard():
+            return await run_history_io(self._get_tool_cards_sync, agent_id)
+
+    async def _load_instance_config(self) -> dict[str, Any]:
+        """Load the instance environment and configuration outside the event loop."""
+        return await run_history_io(_load_instance_config_sync)
+
+    async def _create_sys_operation_off_loop(self) -> SysOperation | None:
+        """Resolve and register the agent sys operation outside the event loop."""
+        async with _agent_build_registry_guard():
+            return await _run_history_io_with_result(
+                self._create_sys_operation,
+                on_result=lambda sys_operation: setattr(self, "_sys_operation", sys_operation),
+            )
+
+    async def _ensure_instance_initialized_off_loop(self) -> None:
+        """Initialize DeepAgent rails on a worker-owned event loop.
+
+        ``DeepAgent.ensure_initialized`` is async, but its rail lifecycle calls
+        synchronous ``rail.init`` implementations inline. Running the whole
+        coroutine in a worker keeps those calls away from AgentServer's loop.
+        The guard remains held until the worker loop settles so cancellation
+        cannot race shared registry cleanup.
+        """
+        instance = self._instance
+        if instance is None:
+            raise RuntimeError("DeepAgent instance is not available")
+
+        async with _agent_build_registry_guard():
+            initialization_loop = getattr(self, "_agent_initialization_loop", None)
+            if initialization_loop is None or initialization_loop.is_closed():
+                initialization_loop = _PersistentAgentEventLoop()
+                self._agent_initialization_loop = initialization_loop
+            await initialization_loop.run(instance.ensure_initialized())
+
+    def _get_tool_cards_sync(self, agent_id: str):
+        """Synchronous tool discovery and registration implementation."""
         tool_cards = []
 
         for wtool in [
@@ -13867,6 +14643,9 @@ class JiuWenSwarmDeepAdapter:
                     "[JiuWenSwarmDeepAdapter] skill source config rejected: %s",
                     exc,
                 )
+        # connector_sources from effective policy / custom_config is not applied
+        # here; marketplace uses the process ConnectorSourceManager defaults until
+        # a global application_config reload path exists (logging_config-style).
         if loaded is None and request is not None and is_enterprise():
             from jiuwenswarm.common.request_identity import web_routing_identity
 
@@ -14021,8 +14800,7 @@ class JiuWenSwarmDeepAdapter:
         self._instance_overrides = dict(config or {}) if isinstance(config, dict) else {}
         if "moa_enabled" in self._instance_overrides and not isinstance(self._instance_overrides["moa_enabled"], bool):
             raise ValueError("moa_enabled must be a boolean")
-        load_dotenv_runtime(dotenv_path=get_env_file(), override=True)
-        config_base = get_config()
+        config_base = await self._load_instance_config()
         # 企业版：create_instance 可带 request，按 routing 读库并合并 model/mcp/permissions
         bootstrap_request = None
         if isinstance(self._instance_overrides, dict):
@@ -14105,42 +14883,19 @@ class JiuWenSwarmDeepAdapter:
         # 权限护栏由 openjiuwen PermissionInterruptRail + ToolPermissionHost 接管；
         # 无需初始化 jiuwenswarm 内置 PermissionEngine（已弃用）。
 
-        sys_operation = self._create_sys_operation()
-        if sys_operation is None:
-            raise RuntimeError("sys_operation is not available, maybe task is not running")
-
-        self._sys_operation = sys_operation
         if self._uses_smart_permission_lifecycle(config_base):
             epoch, global_layer, effective = self._capture_permission_version()
             config_base = {**config_base, "permissions": global_layer}
             self._config_base_cache = config_base.copy()
             self._permission_state.stage_pending_permission_capture(epoch, effective)
-        rails_list = self._build_agent_rails(
-            config,
-            config_base,
-            mode=mode,
-            composition_scope=composition_scope,
-        )
+
+        sys_operation = await self._create_sys_operation_off_loop()
+        if sys_operation is None:
+            raise RuntimeError("sys_operation is not available, maybe task is not running")
+        self._sys_operation = sys_operation
+
         resolved_language = self._resolve_runtime_language()
         workspace_obj = self._get_memory_workspace(resolved_language, config=config_base)
-        if agent_definition is not None and agent_definition.get("tools") != "*":
-            # Do not build delegates with a broader tool set than the root.
-            configured_subagents = []
-        else:
-            configured_subagents = self._build_subagents_with_general_purpose(
-                model=model,
-                config=config,
-                config_base=config_base,
-                rails=rails_list,
-                tools=tool_cards if tool_cards else [],
-                workspace=workspace_obj,
-                sys_operation=sys_operation,
-                reload=False,
-                allow_general=(
-                    sub_mode == "plan"
-                    or (isinstance(mode, str) and mode.startswith("agent"))
-                ),
-            )
         system_prompt = build_agent_identity_prompt(
             language=self._resolve_prompt_language(),
         )
@@ -14151,7 +14906,10 @@ class JiuWenSwarmDeepAdapter:
             )
             from jiuwenswarm.runtime.tool_allowlist import apply_tool_policy_prompt
 
-            system_prompt = apply_tool_policy_prompt(system_prompt, agent_definition.get("tools", "*"))
+            system_prompt = apply_tool_policy_prompt(
+                system_prompt, agent_definition.get("tools", "*")
+            )
+
         common_kwargs = dict(
             model=model,
             card=agent_card,
@@ -14159,8 +14917,6 @@ class JiuWenSwarmDeepAdapter:
             system_prompt=system_prompt,
             tools=tool_cards if tool_cards else [],
             skills=list(agent_definition.get("skills") or ()) if agent_definition else None,
-            subagents=configured_subagents,
-            rails=rails_list if rails_list else [],
             # Enables AbilityManager deferred-tool assignment (whitelist-based).
             # The bundled ProgressiveToolRail this also mounts is replaced in
             # create_instance with our ToolRetrievalPromptRail.
@@ -14174,9 +14930,8 @@ class JiuWenSwarmDeepAdapter:
             workspace=workspace_obj,
             sys_operation=sys_operation,
             language=resolved_language,
-            auto_create_workspace=False
+            auto_create_workspace=False,
         )
-
         context_model_state = _ContextEngineModelState(
             full_config=config_base,
             model_name=getattr(getattr(model, "model_config", None), "model_name", ""),
@@ -14189,19 +14944,70 @@ class JiuWenSwarmDeepAdapter:
         )
         kv_cache_affinity_config = _deep_agent_kv_cache_affinity_config(config_base, model)
         self._kv_cache_affinity_enabled = kv_cache_affinity_config.enable_kv_cache_affinity
-        self._instance = create_deep_agent(
-            **common_kwargs,
-            moa=self._moa_runtime.config if self._moa_runtime is not None else None,
-            context_engine_config=context_engine_config,
-            kv_cache_affinity_config=kv_cache_affinity_config,
-            vision_model_config=self._vision_model_config,
-            audio_model_config=self._audio_model_config,
-            enable_read_image_multimodal=self._resolve_enable_read_image_multimodal(config),
-            enable_model_anomaly_detection_rail=(
-                (config_base.get("execution_guard") or {}).get("model_anomaly_detection_rail") or {}
-            ).get("enabled", False),
-            completion_timeout=resolve_task_loop_completion_timeout(config),
-        )
+
+        build_loop = asyncio.get_running_loop()
+        async with _agent_build_registry_guard():
+            rails_list = await run_history_io(
+                self._build_agent_rails,
+                config,
+                config_base,
+                mode=mode,
+                composition_scope=composition_scope,
+                event_loop=build_loop,
+            )
+            if agent_definition is not None and agent_definition.get("tools") != "*":
+                # Do not build delegates with a broader tool set than the root.
+                configured_subagents = []
+            else:
+                configured_subagents = await run_history_io(
+                    self._build_subagents_with_general_purpose,
+                    model=model,
+                    config=config,
+                    config_base=config_base,
+                    rails=rails_list,
+                    tools=tool_cards if tool_cards else [],
+                    workspace=workspace_obj,
+                    sys_operation=sys_operation,
+                    reload=False,
+                    allow_general=(
+                        sub_mode == "plan"
+                        or (isinstance(mode, str) and mode.startswith("agent"))
+                    ),
+                )
+            subagent_registration_plan = resolve_subagent_registration_plan(
+                configured_subagents,
+                event_names={"statusline-setup", "general-purpose", "browser_agent"},
+            )
+            common_kwargs["subagents"] = subagent_registration_plan.static_subagents
+            if subagent_registration_plan.mode == "event":
+                common_kwargs.update(
+                    subagent_registration_mode="event",
+                    event_subagent_configs=subagent_registration_plan.event_subagents,
+                    extension_bus=subagent_registration_plan.extension_bus,
+                )
+            self._instance = await _run_history_io_with_result(
+                create_deep_agent,
+                **common_kwargs,
+                rails=rails_list if rails_list else [],
+                moa=self._moa_runtime.config if self._moa_runtime is not None else None,
+                context_engine_config=context_engine_config,
+                kv_cache_affinity_config=kv_cache_affinity_config,
+                vision_model_config=self._vision_model_config,
+                audio_model_config=self._audio_model_config,
+                enable_read_image_multimodal=self._resolve_enable_read_image_multimodal(config),
+                enable_model_anomaly_detection_rail=(
+                    (config_base.get("execution_guard") or {})
+                    .get("model_anomaly_detection_rail") or {}
+                ).get("enabled", False),
+                completion_timeout=resolve_task_loop_completion_timeout(config),
+                on_result=lambda instance: setattr(self, "_instance", instance),
+            )
+
+        # AgentSSAS: rail 装配跑在 worker 线程, 其 init Task 必须回到事件循环线程
+        # 派发; rail 进入实例前确保 backend 已完成初始化(初始化异常由 done
+        # callback 告警, fail-open 不阻断)。
+        _dispatch_ssas_init_tasks(build_loop)
+        await _await_ssas_init_tasks()
 
         # progressive_tool_enabled=True armed AbilityManager's deferred-tool
         # assignment (whitelist-based) during _initial_configure. That same
@@ -14257,7 +15063,7 @@ class JiuWenSwarmDeepAdapter:
         self._sync_a2x_runtime_state()
         # Cron tools belong to the agent's standing toolset, not to any one
         # request; build them here so the first turn does not pay for it either.
-        self._ensure_cron_tools_registered(self._parent_session_id)
+        await self._ensure_cron_tools_registered_off_loop(self._parent_session_id)
         self._registered_mcp_server_ids.clear()
         self._registered_mcp_servers.clear()
         # MCP load strategy by channel: the TUI channel loads its global-
@@ -14289,7 +15095,7 @@ class JiuWenSwarmDeepAdapter:
             install_tool_allowlist(self._instance.ability_manager, agent_definition["tools"])
         # Startup rails build discovery indexes and prompts from the ability
         # manager. Apply the boundary first, including to tools added by rails.
-        await self._instance.ensure_initialized()
+        await self._ensure_instance_initialized_off_loop()
         if self._enable_auto_permission:
             expected = PermissionRailGroup(
                 self._permission_rail, self._root_permission_queue_rail,
@@ -15128,6 +15934,11 @@ class JiuWenSwarmDeepAdapter:
                     self._instance.ability_manager.remove(existing.name)
         except Exception as exc:
             logger.debug("[JiuWenSwarmDeepAdapter] 清理 multi-session 工具失败: %s", exc)
+
+    async def _ensure_cron_tools_registered_off_loop(self, session_id: str | None) -> None:
+        """Register startup cron tools without blocking the event loop."""
+        async with _agent_build_registry_guard():
+            await run_history_io(self._ensure_cron_tools_registered, session_id)
 
     def _ensure_cron_tools_registered(self, session_id: str | None) -> None:
         """Register this agent's cron tools once, rebuilding only when they change.
@@ -16212,9 +17023,48 @@ class JiuWenSwarmDeepAdapter:
                 snapshot.cleanup()
                 self._rsi_selected_package_snapshot = None
 
+    async def _close_agent_initialization_loop(self) -> None:
+        """Clean up loop-bound agent resources before stopping its worker loop."""
+        initialization_loop = getattr(self, "_agent_initialization_loop", None)
+        if initialization_loop is None:
+            return
+        instance = getattr(self, "_instance", None)
+
+        async def cleanup_on_owner_loop() -> None:
+            if instance is None:
+                return
+            configured_rails = getattr(instance, "configured_rails", None)
+            unregister_rail = getattr(instance, "unregister_rail", None)
+            rails = list(configured_rails() or []) if callable(configured_rails) else []
+            if callable(unregister_rail):
+                for rail in rails:
+                    try:
+                        await unregister_rail(rail)
+                    except Exception as exc:
+                        logger.warning(
+                            "[JiuWenSwarmDeepAdapter] owner-loop rail cleanup failed: %s",
+                            exc,
+                        )
+            cleanup_task_resources = getattr(instance, "cleanup_task_resources", None)
+            if callable(cleanup_task_resources):
+                await cleanup_task_resources()
+
+        try:
+            if instance is not None:
+                await initialization_loop.run(cleanup_on_owner_loop())
+        except Exception as exc:
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] owner-loop agent cleanup failed: %s",
+                exc,
+            )
+        finally:
+            await initialization_loop.close()
+            if getattr(self, "_agent_initialization_loop", None) is initialization_loop:
+                self._agent_initialization_loop = None
+
     async def _cleanup_adapter_resources(self) -> None:
         """Release adapter-owned external runtime resources."""
-        # TODO(compact): Native compaction bindings are not installed in this interface-only stage.
+        # Native compaction: Native compaction bindings are not installed in this interface-only stage.
         # from jiuwenswarm.extensions_v2.assembly import get_compaction_service
         # compact = get_compaction_service()
         # context = getattr(self, "_extension_compact_context", None)
@@ -16287,7 +17137,9 @@ class JiuWenSwarmDeepAdapter:
                 "[JiuWenSwarmDeepAdapter] PersonalContextRail cleanup failed: %s",
                 exc,
             )
+        await self._close_agent_initialization_loop()
         self._teardown_agent_owned_tools()
+        await self._release_session_agent_callbacks()
         self._release_sys_operations()
         # 取消未到期的延时重索引 task，避免 adapter cleanup 后仍有孤儿 task
         # 去触发 manager.sync（此时 rail/manager 可能已失效）。
@@ -16355,17 +17207,195 @@ class JiuWenSwarmDeepAdapter:
         re-registers over the stale ids (one refresh warning per tool) and the
         residual instances keep holding a stale SysOperation reference. Shared
         singletons and externally-scoped ids are left alone.
+
+        Session-scoped registry purge always runs afterwards (even when
+        ``_instance`` / ``ability_manager`` is missing) so the
+        tools-registered-before-instance-ready failure path still drops
+        ``{name}_{owner}`` entries from ``resource_mgr``.
         """
-        if self._instance is None:
-            return
-        ability_manager = getattr(self._instance, "ability_manager", None)
-        if ability_manager is None:
+        instance = self._instance
+        if instance is not None:
+            ability_manager = getattr(instance, "ability_manager", None)
+            if ability_manager is not None:
+                try:
+                    ability_manager.teardown_tools()
+                except Exception as exc:
+                    logger.warning(
+                        "[JiuWenSwarmDeepAdapter] agent tool teardown failed: %s", exc
+                    )
+        self._purge_session_scoped_registry_entries()
+
+    def _purge_session_scoped_registry_entries(self) -> None:
+        """issue#5240 止血:会话级注册的全局资源表条目按后缀批量注销。
+
+        会话 adapter 构建时以 ``{name}_{owner}``（owner="{card}_s_{session}"，
+        见 _tool_owner_id）向 Runner.resource_mgr 注册 stateful 工具卡——id
+        内嵌会话键、每会话唯一。teardown_tools 只摘 ability_manager 侧 owner
+        命名的条目，resource_mgr 里会话后缀形态没有注销路径，逐出后永驻
+        （census 实证 gc.collect 后仍 +20 ToolCard/会话，RSS 线性涨至 OOM）。
+
+        只覆盖 ToolCard：AgentCard 不进 _id_to_card（resource_mgr.add_agent
+        仅 BaseTeam 体系调用，本服务团队运行时走 TeamRuntimeManager），其堆
+        对象滞留由 _release_session_agent_callbacks 承担。匹配用
+        ``{name}_{owner}`` 精确重构而非裸 endswith：session key 为客户端可
+        控字符串，裸后缀匹配存在会话 B 的 key 字面以会话 A 的 owner 段结尾
+        时误删 B 在用工具的理论窗口。
+        """
+        if not self._is_session_scoped_adapter:
             return
         try:
-            ability_manager.teardown_tools()
-        except Exception as exc:
+            owner = self._tool_owner_id()
+            rm = Runner.resource_mgr
+            id_to_card = getattr(rm, "_id_to_card", None) or {}
+            suffix = f"_{owner}"
+            stale: list[str] = []
+            for rid in id_to_card:
+                card = id_to_card.get(rid)
+                if not rid.endswith(suffix):
+                    continue
+                if rid != f"{getattr(card, 'name', '')}_{owner}":
+                    continue
+                stale.append(rid)
+            if not stale:
+                return
+            removed = 0
+            for rid in stale:
+                try:
+                    rm.remove_tool(rid)
+                    removed += 1
+                except Exception as exc:  # noqa: BLE001 - 单条失败不中止
+                    logger.warning(
+                        "[JiuWenSwarmDeepAdapter] session registry purge "
+                        "failed: id=%s error=%s", rid, exc,
+                    )
+            logger.info(
+                "[JiuWenSwarmDeepAdapter] session registry purged: owner=%s "
+                "removed=%d/%d", owner, removed, len(stale),
+            )
+        except Exception as exc:  # noqa: BLE001 - 止血路径不阻塞 cleanup
             logger.warning(
-                "[JiuWenSwarmDeepAdapter] agent tool teardown failed: %s", exc
+                "[JiuWenSwarmDeepAdapter] session registry purge error: %s", exc
+            )
+
+    async def _release_session_agent_callbacks(self) -> None:
+        """issue#5240 止血:反注册会话内全部 agent 实例的回调。
+
+        BaseAgent.__init__ 以实例命名空间(uuid4)向进程全局
+        Runner.callback_framework 注册 rail/hook 回调,agent 无任何生命周期
+        方法反注册——空闲逐出后 CallbackInfo 持 bound method 把整个 agent
+        对象图钉死(census 实证:_callbacks items 与存活 CallbackInfo 总数
+        一一相等,~144 个/会话,AbilityManager/ToolCard/ContextEngine/PromptSection
+        全被连带滞留,RSS 线性涨至 OOM)。
+
+        从 self._instance 出发做有界 DFS(只走前向引用,不触全局表),收集
+        agent_callback_manager / _agent_callback_manager 后逐个 clear()——按
+        实例命名空间整组反注册。遍历显式跳过 adapter 对象:skill_turbo 启用时
+        (出厂默认开) rail 持本 adapter 引用,经 _session_parent_adapter/
+        _session_adapters 回边可达常驻 root agent 与其他活跃会话的实例,误清
+        其回调且 rail 无重注册自愈。agent-core 提供 BaseAgent.aclose 时优先
+        调用(实例+内裹 react agent+子代理控制一并释放),DFS 保留作残余清扫
+        (clear 幂等,旧版 core 无 aclose 时 DFS 独立兜底)。
+        """
+        if not self._is_session_scoped_adapter or self._instance is None:
+            return
+        try:
+            instance_close = getattr(self._instance, "aclose", None)
+            if instance_close is not None:
+                try:
+                    await instance_close()
+                except Exception as exc:  # noqa: BLE001 - 失败降级 DFS
+                    logger.warning(
+                        "[JiuWenSwarmDeepAdapter] session instance aclose "
+                        "failed: %s", exc,
+                    )
+            from types import BuiltinFunctionType, FunctionType, MethodType, ModuleType
+
+            managers: list = []
+            seen: set[int] = set()
+            manager_ids: set[int] = set()
+            stack: list = [self._instance]
+            while stack and len(seen) < 4000:
+                obj = stack.pop()
+                obj_id = id(obj)
+                if obj_id in seen:
+                    continue
+                seen.add(obj_id)
+                if isinstance(
+                    obj, (type, ModuleType, FunctionType, MethodType, BuiltinFunctionType)
+                ):
+                    continue
+                if isinstance(obj, JiuWenSwarmDeepAdapter):
+                    # 切断 adapter 回边:StreamEventRail._skill_turbo_adapter、
+                    # _session_parent_adapter、_session_adapters 均以 adapter
+                    # 对象为载体,跳过即全部不可达(CR-1)。
+                    continue
+                # Prefer public agent_callback_manager (same contract as
+                # _isolate_permission_instance / native_harness), then the
+                # private field. Resolve via __dict__/property/slots only —
+                # bare getattr on arbitrary graph nodes (e.g. MagicMock)
+                # auto-creates attributes and would false-positive.
+                manager = None
+                obj_dict = getattr(obj, "__dict__", None)
+                if isinstance(obj_dict, dict):
+                    if "agent_callback_manager" in obj_dict:
+                        manager = obj_dict["agent_callback_manager"]
+                    elif "_agent_callback_manager" in obj_dict:
+                        manager = obj_dict["_agent_callback_manager"]
+                if manager is None:
+                    public_attr = getattr(type(obj), "agent_callback_manager", None)
+                    if isinstance(public_attr, property):
+                        try:
+                            manager = public_attr.__get__(obj, type(obj))
+                        except Exception:  # noqa: BLE001 - skip broken descriptors
+                            manager = None
+                if manager is None:
+                    slots = getattr(type(obj), "__slots__", ())
+                    if isinstance(slots, str):
+                        slots = (slots,)
+                    if "_agent_callback_manager" in slots:
+                        manager = getattr(obj, "_agent_callback_manager", None)
+                    elif "agent_callback_manager" in slots:
+                        manager = getattr(obj, "agent_callback_manager", None)
+                if manager is not None:
+                    mid = id(manager)
+                    if mid not in manager_ids:
+                        manager_ids.add(mid)
+                        managers.append(manager)
+                if isinstance(obj, dict):
+                    stack.extend(obj.values())
+                elif isinstance(obj, (list, tuple, set, frozenset)):
+                    stack.extend(obj)
+                else:
+                    try:
+                        stack.extend(vars(obj).values())
+                    except TypeError:
+                        pass
+            released = 0
+            for manager in managers:
+                try:
+                    await manager.clear()
+                    released += 1
+                except Exception as exc:  # noqa: BLE001 - 单个失败不中止
+                    logger.warning(
+                        "[JiuWenSwarmDeepAdapter] session agent callback release "
+                        "failed: error=%s", exc,
+                    )
+            if managers:
+                logger.info(
+                    "[JiuWenSwarmDeepAdapter] session agent callbacks released: "
+                    "%d/%d (session_id=%s)", released, len(managers),
+                    self._parent_session_id,
+                )
+            else:
+                logger.warning(
+                    "[JiuWenSwarmDeepAdapter] session agent callback release "
+                    "found no managers (session_id=%s); hemostasis may be a "
+                    "no-op for this instance",
+                    self._parent_session_id,
+                )
+        except Exception as exc:  # noqa: BLE001 - 止血路径不阻塞 cleanup
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] session agent callback release error: %s", exc
             )
 
     def _collect_registered_ability_names(self) -> set[str]:
@@ -17042,10 +18072,6 @@ class JiuWenSwarmDeepAdapter:
             budget=budget,
             token_counter=token_counter,
         )
-        log_fields = (
-            "session=%s tokens=%s limit=%s window=%s system=%s tools=%s "
-            "reserved=%s model=%s"
-        )
         log_args = (
             request.session_id,
             decision.tokens,
@@ -17060,13 +18086,25 @@ class JiuWenSwarmDeepAdapter:
             # The fixed prompt/tool cost already fills the window. This is a
             # model-context configuration problem, not a user-input problem;
             # let the request proceed and surface it through the normal path.
-            logger.warning("[InputGuard] budget exhausted; " + log_fields, *log_args)
+            logger.warning(
+                "[InputGuard] budget exhausted; session=%s tokens=%s limit=%s window=%s system=%s tools=%s "
+                "reserved=%s model=%s",
+                *log_args,
+            )
             return
         if not decision.rejected:
-            logger.info("[InputGuard] pass " + log_fields, *log_args)
+            logger.info(
+                "[InputGuard] pass session=%s tokens=%s limit=%s window=%s system=%s tools=%s "
+                "reserved=%s model=%s",
+                *log_args,
+            )
             return
 
-        logger.warning("[InputGuard] reject " + log_fields, *log_args)
+        logger.warning(
+            "[InputGuard] reject session=%s tokens=%s limit=%s window=%s system=%s tools=%s "
+            "reserved=%s model=%s",
+            *log_args,
+        )
         message = config.message(
             self._input_guard_language(),
             tokens=decision.tokens,
@@ -17954,7 +18992,7 @@ class JiuWenSwarmDeepAdapter:
             message = "任务已恢复"
 
         elif intent == "supplement":
-            # supplement: 停止当前执行，但保留 todo（新任务会根据 todo 待办继续执行）
+            # 补充请求停止当前执行，保留待办供新任务继续。
             cutover_handoff = await self._permission_dispatch.start_cutover(_normalized_sid)
             (
                 cancelled_tool_results,
@@ -17973,7 +19011,7 @@ class JiuWenSwarmDeepAdapter:
                     )
                     or continuation_discarded
                 )
-            # 不清理 todo — 保留给新任务继续
+            # 保留待办供新任务继续。
             logger.info(
                 "[JiuWenSwarmDeepAdapter] interrupt(supplement): 已停止执行 request_id=%s",
                 request.request_id,
@@ -18048,7 +19086,7 @@ class JiuWenSwarmDeepAdapter:
         if new_input:
             payload["new_input"] = new_input
 
-        # cancel 后附带更新的 todo 列表，通知前端刷新
+        # 取消后附带更新的待办列表，通知前端刷新。
         if intent not in ("pause", "resume", "supplement") and updated_todos is not None:
             payload["todos"] = updated_todos
 
@@ -18243,7 +19281,7 @@ class JiuWenSwarmDeepAdapter:
         if cancelled_tool_results:
             payload["cancelled_tools"] = cancelled_tool_results
             await self._append_cancelled_tools_to_history(request, cancelled_tool_results)
-        # Best-effort todo cancellation for user cancel (does not touch runtime).
+        # Mark pending tasks as cancelled without changing the runtime.
         if cancelled and intent == "cancel" and request.session_id:
             try:
                 updated_todos = await self._cancel_pending_todos(request.session_id)
@@ -19631,10 +20669,10 @@ class JiuWenSwarmDeepAdapter:
                     session_id,
                 )
 
-            # 重新加载并返回前端格式的 todo 列表
+            # 重新加载并返回前端格式的待办列表。
             updated_todos = await modify_tool.load_todos(session_id)
             if updated_todos and self._stream_event_rail is not None:
-                return self._stream_event_rail._format_todos_for_frontend(updated_todos)
+                return self._stream_event_rail._format_todos_for_frontend(updated_todos)  # pylint: disable=protected-access
             return None
         except Exception as exc:
             logger.warning("[JiuWenSwarmDeepAdapter] 标记 todo cancelled 失败: %s", exc)
@@ -19740,7 +20778,7 @@ class JiuWenSwarmDeepAdapter:
         if model_info is not None:
             metadata[SESSION_MODEL_INFO_KEY] = dict(model_info)
         context = SessionContext(request.session_id or "default", cwd=get_cwd(), metadata=metadata)
-        # TODO(compact): Keep session.start unchanged; native compaction binding is deferred.
+        # Native compaction: Keep session.start unchanged; native compaction binding is deferred.
         # self._bind_extension_compaction(context.session_id, context=context)
         await manager.ensure_session_started(
             context, request_id=request.request_id or "", channel_id=request.channel_id or "",
@@ -22057,7 +23095,7 @@ class JiuWenSwarmDeepAdapter:
                     continue
 
                 if chunk_type == "llm_usage":
-                    logger.info(f"[JiuWenSwarmDeepAdapter] llm_usage chunk: {chunk}")
+                    logger.info("[JiuWenSwarmDeepAdapter] llm_usage chunk: %s", chunk)
                     usage_meta = (
                         chunk.payload.get("usage_metadata", {})
                         if isinstance(chunk.payload, dict)
@@ -23533,7 +24571,7 @@ class JiuWenSwarmDeepAdapter:
                             "[JiuWenSwarmDeepAdapter] register MemoryRail failed: %s", e
                         )
                     else:
-                        logger.info(f"[JiuWenSwarmDeepAdapter] MemoryRail registered for {mode} mode")
+                        logger.info("[JiuWenSwarmDeepAdapter] MemoryRail registered for %s mode", mode)
                         # 重建后触发延时重索引（debounce），使新 embedding 配置对历史记忆文件生效
                         # （jiuwen 变体没有本地索引，跳过）
                         if (
@@ -23546,7 +24584,7 @@ class JiuWenSwarmDeepAdapter:
                 await self._drain_jiuwen_memory_rail(self._memory_rail)
                 await self._instance.unregister_rail(self._memory_rail)
                 self._memory_rail = None
-                logger.info(f"[JiuWenSwarmDeepAdapter] MemoryRail unregistered for {mode} mode")
+                logger.info("[JiuWenSwarmDeepAdapter] MemoryRail unregistered for %s mode", mode)
 
     def _build_external_memory_rail(self):
         from jiuwenswarm.agents.harness.common.memory.external_memory_builder import (
@@ -23725,7 +24763,7 @@ class JiuWenSwarmDeepAdapter:
             *,
             return_state: bool = False,
             processor_types: list[str] | None = None,
-            # TODO(compact): Reserve instructions until native integration resumes.
+            # Native compaction: Reserve instructions until native integration resumes.
             # instructions: str | None = None,
     ) -> dict[str, Any]:
         """主动触发上下文压缩。
@@ -23769,7 +24807,7 @@ class JiuWenSwarmDeepAdapter:
             context, react_agent, session_id
         )
 
-        # TODO(compact): Retain the future manual bridge; execute the original compression path.
+        # Native compaction: Retain the future manual bridge; execute the original compression path.
         # compact_service = self._bind_extension_compaction(session_id)
         # if compact_service is not None:
         #     from jiuwenswarm.extensions_v2.event_types.session_compact import SessionCompacted
@@ -23812,7 +24850,7 @@ class JiuWenSwarmDeepAdapter:
             result = compact_result
 
         response: dict[str, Any] = {"result": result}
-        # TODO(compact): The native manual response retains its original contract.
+        # Native compaction: The native manual response retains its original contract.
         # if isinstance(compact_result, dict) and compact_result.get("skip"):
             # response["skip"] = compact_result["skip"]
         if return_state and state:

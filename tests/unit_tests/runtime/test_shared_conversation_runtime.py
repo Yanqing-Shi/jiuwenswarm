@@ -38,7 +38,7 @@ async def shared_runtime(request, tmp_path, monkeypatch):
                     await PersistenceCheckpointerProvider().create({"db_type": "sqlite", "db_path": str(tmp_path / "cp")}))
     monkeypatch.setattr(CheckpointerFactory, "_default_checkpointer", checkpointer)
     sid = "shared-runtime"
-    session_metadata.init_session_metadata(session_id=sid, channel_id="tui", user_id="user",
+    session_metadata.init_session_metadata(session_id=sid, channel_id="web", user_id="user",
                                            mode="agent.work.normal", work_mode="work")
     binding = await initialize_main_conversation(sid)
     await Runner.start()
@@ -146,7 +146,7 @@ async def test_deep_adapter_binds_before_restore_and_reads_the_shared_record(sha
         await env.binding.store.commit(env.binding.key, ConversationSnapshot(messages=[UserMessage(content="shared history")]))
         assert await warmup_session_context(deep_agent=adapter._instance, session_id=env.sid)
         assert adapter._instance.react_agent.context_engine.get_context(session_id=env.sid).get_messages()[0].content == "shared history"
-        request = AgentRequest(request_id="A", session_id=env.sid, channel_id="tui", req_method=ReqMethod.CHAT_SEND,
+        request = AgentRequest(request_id="A", session_id=env.sid, channel_id="web", req_method=ReqMethod.CHAT_SEND,
                                params={"mode": "agent.work.normal", "query": "A"})
         async with adapter._conversation_request_admission(request):
             result = await adapter._instance.invoke({"query": "A"}, session)
@@ -178,7 +178,7 @@ async def test_marked_shared_missing_record_never_falls_back_to_history(shared_r
 @pytest.mark.asyncio
 async def test_old_session_is_not_migrated_or_given_an_empty_shared_record(shared_runtime):
     old = "legacy-runtime"
-    session_metadata.init_session_metadata(session_id=old, channel_id="tui", mode="agent.work.normal")
+    session_metadata.init_session_metadata(session_id=old, channel_id="web", mode="agent.work.normal")
     assert await load_main_binding(old) is None
     assert "context_storage" not in session_metadata.get_session_metadata(old)
 
@@ -234,7 +234,7 @@ async def test_team_producer_binds_the_actual_leader_to_the_existing_main_window
     await env.binding.store.commit(env.binding.key, ConversationSnapshot(messages=[UserMessage(content="A from main")]))
     session_metadata.patch_session_metadata(env.sid, {"mode": "team.work.normal"})
     with bind_leader_preparation(prepare_shared_leader):
-        task = asyncio.create_task(team_helpers._consume_stream_with_query("tui", env.sid, spec, "B to Leader",
+        task = asyncio.create_task(team_helpers._consume_stream_with_query("web", env.sid, spec, "B to Leader",
                                                                            round_id=1, round_request_id="B"))
     try:
         await asyncio.wait_for(completed.wait(), 15)
@@ -445,7 +445,7 @@ async def test_public_runtime_keeps_one_main_record_across_all_eight_modes(share
         queue = queues.setdefault(env.sid, asyncio.Queue())
         with bind_leader_preparation(prepare_shared_leader):
             producer = asyncio.create_task(team_helpers._consume_stream_with_query(
-                "tui", env.sid, spec, request.params["query"], round_id=1, round_request_id=request.request_id,
+                "web", env.sid, spec, request.params["query"], round_id=1, round_request_id=request.request_id,
             ))
         try:
             while True:
@@ -504,9 +504,9 @@ async def test_public_runtime_keeps_one_main_record_across_all_eight_modes(share
                     await context.compress_context()
             if mode != current:
                 runtime.switch_session_mode(session_id=env.sid, target_mode=mode, expected_mode=current,
-                                            channel_id="tui", user_id="user")
+                                            channel_id="web", user_id="user")
                 current = mode
-            request = AgentRequest(request_id=f"matrix-{index}", session_id=env.sid, channel_id="tui", user_id="user",
+            request = AgentRequest(request_id=f"matrix-{index}", session_id=env.sid, channel_id="web", user_id="user",
                                    req_method=ReqMethod.CHAT_SEND, params={"mode": mode, "query": f"turn-{index}"})
             events = await asyncio.wait_for(runtime.invoke(request, trigger_hook=False), 20)
             assert not [event for event in events if event.event_type == "chat.error"], events
@@ -556,7 +556,7 @@ async def test_cached_leader_rejects_background_work_after_mode_switch_without_l
     await team_session.pre_run()
     runtime = AgentRuntime(agent_manager=FakeAgentManager(), initializer=AsyncMock())
     await runtime.start()
-    await runtime._session_coordinator.register_session(env.sid, "tui")
+    await runtime._session_coordinator.register_session(env.sid, "web")
     token = set_runtime_context(runtime, runtime.agent_manager)
     try:
         with bind_leader_preparation(prepare_shared_leader):
@@ -567,7 +567,7 @@ async def test_cached_leader_rejects_background_work_after_mode_switch_without_l
                 await asyncio.sleep(0.01)
         assert len(requests) == 1
         runtime.switch_session_mode(session_id=env.sid, target_mode="agent.work.normal",
-                                    expected_mode="team.work.normal", channel_id="tui", user_id="user")
+                                    expected_mode="team.work.normal", channel_id="web", user_id="user")
         with pytest.raises(RuntimeError, match="session mode changed"):
             await native.send("stale background input")
         assert len(requests) == 1
@@ -726,7 +726,7 @@ async def test_rewind_replaces_the_shared_record_that_the_next_turn_reads(rewind
         assert contents[:2] == ["first", "one"]
         assert not {"second", "two", "third", "three"} & set(contents)
 
-        request = AgentRequest(request_id="B", session_id=env.sid, channel_id="tui", req_method=ReqMethod.CHAT_SEND,
+        request = AgentRequest(request_id="B", session_id=env.sid, channel_id="web", req_method=ReqMethod.CHAT_SEND,
                                params={"mode": "agent.work.normal", "query": "B"})
         async with adapter._conversation_request_admission(request):
             await adapter._instance.invoke({"query": "B"}, adapter._instance.loop_session)
@@ -786,7 +786,7 @@ async def test_shared_session_operation_owns_only_a_shared_session(shared_runtim
             acquire_operation("session", env.sid)
     acquire_operation("session", env.sid).close()
 
-    session_metadata.init_session_metadata(session_id="legacy-rewind", channel_id="tui", mode="agent.work.normal")
+    session_metadata.init_session_metadata(session_id="legacy-rewind", channel_id="web", mode="agent.work.normal")
     async with shared_session_operation("legacy-rewind"):
         acquire_operation("session", "legacy-rewind").close()
 
@@ -794,7 +794,7 @@ async def test_shared_session_operation_owns_only_a_shared_session(shared_runtim
 def _rewind_request(sid, method):
     from jiuwenswarm.common.schema.agent import AgentRequest
 
-    return AgentRequest(request_id="rewind-1", channel_id="tui", session_id=sid, req_method=method,
+    return AgentRequest(request_id="rewind-1", channel_id="web", session_id=sid, req_method=method,
                         params={"session_id": sid, "turn_index": 1})
 
 
@@ -884,7 +884,7 @@ async def _started_shared_leader(env, monkeypatch):
     await team_session.pre_run()
     runtime = AgentRuntime(agent_manager=FakeAgentManager(), initializer=AsyncMock())
     await runtime.start()
-    await runtime._session_coordinator.register_session(env.sid, "tui")
+    await runtime._session_coordinator.register_session(env.sid, "web")
     token = set_runtime_context(runtime, runtime.agent_manager)
     with bind_leader_preparation(prepare_shared_leader):
         await harness.start(team_session=team_session)

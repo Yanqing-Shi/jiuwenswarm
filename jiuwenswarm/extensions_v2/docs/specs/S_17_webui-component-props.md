@@ -3,7 +3,7 @@
 | 项目 | 约定 |
 | --- | --- |
 | 维护范围 | 插件侧声明、AgentServer / Gateway 后端校验、Web 前端校验与渲染 |
-| 最近修订 | 2026-11-09 |
+| 最近修订 | 2026-11-21 |
 | 适用协议 | `webui-tree`，`schema_version=1`；本文件修订不等于自动升级 wire 版本 |
 | 相关设计与验证记录 | [F_01 组件目录与渲染适配](../../../channels/web/frontend/src/features/webui/docs/features/F_01_antd-components.md) |
 | 相邻行为契约 | [S_01 组件运行与交互](../../../channels/web/frontend/src/features/webui/docs/specs/S_01_components.md) |
@@ -102,7 +102,7 @@ Tabs 隐藏页签的节点也计入整树预算。更小的组件字段限制优
 | 其余已实现组件 | 不允许 | 包括 Button、Text、Iframe、文件组件和媒体组件 |
 
 Panel / Iframe 只能作为允许其使用的槽位的树根。
-`conversation.panel.right` 的根白名单为 Panel / Iframe，二者的 title 同时作为右侧页签名称。
+`conversation.panel.right` 的根白名单为 Panel / Iframe，二者的 title 同时作为右侧页签名称，可选的 icon 作为页签图标。
 `application.menu.main` 和 `task.function.main` 允许 Iframe 专用根，也允许普通组件树。
 `task.function` 与 `task.function.main` 使用应用作用域，按当前 Web 连接隔离，不携带 `session_id`；
 空对话也可挂载，切换会话不改变实例归属或关闭已打开的任务页面。入口与页面共享包和实例标识。
@@ -408,8 +408,9 @@ cover 必须为合法 URL。允许普通子节点，无业务事件；extra 只�
 | 属性 | 类型 | 必填 | 默认值 | 含义 |
 | --- | --- | --- | --- | --- |
 | `title` | string（<= 200 UTF-8 字节） | 是 | — | 宿主页签名称，去空白后必须非空 |
+| `icon` | IconName | 否 | — | 宿主页签图标；省略时使用宿主默认插件图标，未知名称按非法属性拒绝 |
 
-只允许作为具备专用根许可的树根，必须有非空节点 children；不能嵌套 Panel / Iframe。title 用于宿主页签名称。无事件。
+只允许作为具备专用根许可的树根，必须有非空节点 children；不能嵌套 Panel / Iframe。title 用于宿主页签名称，icon 只影响宿主渲染的页签图标，不改写节点内容。无事件。
 
 ### 4.16 FileTree
 
@@ -440,22 +441,87 @@ file=null 表示无文件；非空对象至少提供 content 或 downloadUrl，n
 
 ### 4.18 Iframe
 
+在允许 Iframe 作为根节点的槽位（例如 AgentServer 插件的 `conversation.panel.right`）里，用 `src` 加载网页或插件资源，或用 `srcDoc` 预览内联 HTML。两者必填其一，同时提供 `title`。Iframe 无子节点或业务事件。
+
+#### 默认支持
+
+- 两种输入都默认开放脚本、表单提交、弹窗、模态对话框和下载。弹窗继承沙盒，浏览器仍会应用各项功能本身的使用条件。
+- 在启用宿主文档隔离的内置 Personal Web 中，`src` 指向与工作台不同来源的 HTTP(S) 网页时，宿主添加 `allow-same-origin`，让网页保留自己的来源，可使用自己的 `localStorage` 和 `IndexedDB`。来源由浏览器按协议、主机和端口判断。由 WorkSwarm 启动、由插件启动或已部署的网页遵循同一规则。
+- `srcDoc`、宿主同源的 URL 和未启用宿主文档隔离的入口使用基本沙盒，文档在不透明来源中运行。加载到带有更严格沙盒响应头的宿主文件或插件资源时，浏览器继续执行该响应的隔离规则。
+
+#### 通过 `permissions` 申请
+
+`src` 可以按实例声明浏览器支持的能力名，例如 `fullscreen`（全屏）、`camera`（摄像头）、`microphone`（麦克风）、`clipboard-write`（剪贴板写入）和 `autoplay`（自动播放）。每项只填一个名称。宿主校验名称格式，按首次出现的顺序去重，再生成 iframe 的 `allow` 属性。省略字段或传空列表时，浏览器使用默认策略。浏览器忽略无法识别的名称。 [Permissions Policy](https://www.w3.org/TR/permissions-policy/)
+
+声明只开放申请资格。网页照常调用自己的浏览器 API。摄像头和麦克风还要求页面保留可用的来源、处于安全上下文，并获得浏览器或桌面宿主的设备权限。全屏等能力也受浏览器的用户操作要求和上层策略约束。
+
+当 WorkSwarm 的 Electron 主窗口通过内置 Personal Web 服务加载工作台时，保留自身来源的跨源 V2 iframe 可以申请摄像头或麦克风。宿主核对 iframe 已声明所需设备，再在授权弹窗中显示请求来源和所需设备。缺少对应声明时直接拒绝。如果有多个 iframe 加载同一地址，Electron 无法区分由哪一个发起请求，候选实例都须声明此次请求的设备。选择「允许本次」只批准当前请求。选择「拒绝」或关闭对话框会拒绝请求，设备使用仍受浏览器策略和操作系统授权约束。
+
+FrontendOnly 模式通过 `file://` 加载本地前端，V2 iframe 使用基础沙盒并以不透明来源运行。此模式下，即使 `permissions` 声明了 `camera` 或 `microphone`，设备请求也会被拒绝，Electron 不会显示授权弹窗。
+
+#### 组件边界
+
+- 宿主忽略 `srcDoc` 上的 `permissions`，内联 HTML 照常预览。基本沙盒中的文档无法使用 `localStorage`、`IndexedDB` 等依赖正常来源的存储，也无法通过声明权限启用摄像头或麦克风。
+- iframe 的原始 `sandbox` 和 `allow` 属性由宿主生成。插件不能通过 `permissions` 修改沙盒、访问工作台 DOM 或存储、导航工作台顶层页面，或让弹窗脱离沙盒。内置 Personal Web 通过 HTTP 响应头阻止嵌入工作台和登录回调，宿主文件的来源隔离也覆盖重定向及嵌套加载。
+- 被嵌入网页可以用响应头禁止自身被嵌入。它的限制与浏览器、用户和操作系统的权限决定都会继续生效。
+
+#### JSON 示例
+
+用 `src` 加载会议网页并申请摄像头、麦克风和全屏。把示例 URL 换成实际允许嵌入的网页地址。
+
+```json
+{
+  "component": "Iframe",
+  "props": {
+    "title": "会议室",
+    "src": "https://meeting.example.com/room/demo",
+    "permissions": ["camera", "microphone", "fullscreen"]
+  }
+}
+```
+
+用 `srcDoc` 预览插件生成的 HTML。
+
+```json
+{
+  "component": "Iframe",
+  "props": {
+    "title": "处理结果",
+    "srcDoc": "<!doctype html><html lang='zh-CN'><body><p>处理完成。</p></body></html>"
+  }
+}
+```
+
+#### 属性与渲染
+
 | 属性 | 类型 | 必填 | 默认值 | 含义 |
 | --- | --- | --- | --- | --- |
 | `src` | LocalizedText | 与 srcDoc 二选一 | — | 网页或插件资源地址；每种语言分别遵循本组件的严格 URL 规则 |
 | `srcDoc` | LocalizedText | 与 src 二选一 | — | 插件生成的完整 HTML 文档，每种语言最长 16 KiB，去空白后非空 |
 | `title` | LocalizedText（每种语言 <= 200 UTF-8 字节） | 是 | — | 页面名称 / 右侧页签名称，各语言去空白后必须非空 |
 | `minWidth` | number（>= 0，<= 4096） | 否 | `0` | iframe 文档的最小宽度，单位 px；容器不足此宽度时由宿主外层提供横向滚动 |
+| `icon` | IconName | 否 | — | 右侧页签图标；省略时使用宿主默认插件图标，未知名称按非法属性拒绝 |
+| `permissions` | string[] | 否 | — | `src` 页面申请的浏览器能力。每项为单个非空名称，只含 ASCII 字母、数字、`-`、`_`、`.`。`srcDoc` 忽略该字段 |
 
-只允许作为具备专用根许可的树根，无子节点或事件。URL 额外拒绝控制字符、反斜杠、三斜杠开头、凭据、无效 authority 与端口。宿主固定 sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"，不含 allow-same-origin，插件不可覆盖。iframe 宽度取容器可用宽度与 minWidth 中较大者；URL 和内联文档采用相同规则，不提供适应 / 桌面宽度切换。容器尺寸变化只调整布局，不重建浏览上下文；插件发送 replace 仍遵循整树重建契约。同 URL/文档刷新、URL 模式的外链打开与 15 秒慢加载提示为宿主功能。仅在 active 且 connected 时创建，隐藏 / 断连时卸载，不承诺保活。src 与 srcDoc 必须且只能提供一个；地址、文档和标题独立按宿主语言选择，切换文档释放旧浏览上下文，不接受不完整的语言映射。
+URL 额外拒绝控制字符、反斜杠、三斜杠开头、凭据、无效 authority 与端口。宿主基本沙盒为 `allow-scripts allow-forms allow-popups allow-modals allow-downloads`。
+
+iframe 宽度取容器可用宽度与 `minWidth` 中较大者。URL 和内联文档采用相同规则，不提供适应 / 桌面宽度切换。容器尺寸变化只调整布局。Iframe 仅在 active 且 connected 时创建，隐藏和断连时卸载。地址、文档和标题独立按宿主语言选择，语言映射必须完整。切换文档或有效 `allow` 时重建 iframe，插件发送 replace 遵循整树重建契约。
+
+`icon` 只设置宿主渲染的页签图标。
+
+The built-in Personal Web server isolates host documents. On that entry point, the host adds `allow-same-origin` when `src` resolves to an HTTP(S) URL with an origin different from the host's. Applications can use storage for their own origin regardless of how they are launched or deployed. Same-origin URLs, inline documents, and deployments without host document isolation use the base sandbox. Host document response policies apply across redirects and nested frames.
+
+URL-backed documents may request browser features using `permissions`. Each entry is a nonempty feature name containing only ASCII letters, digits, `-`, `_`, or `.`. The host emits each distinct name once in the iframe's `allow` attribute, preserving first occurrence order. If the list is omitted or empty, the host omits `allow` and the browser applies its default policy. The host ignores `permissions` on inline documents and applies the base sandbox. The browser ignores unrecognized features. Origin, inherited policies, and user consent still apply.
+
+When the WorkSwarm Electron main window loads the workbench from the built-in Personal Web server, a cross-origin V2 iframe that retains its own origin can request access to the camera or microphone. The host checks that the iframe declared the requested devices before showing the requesting origin and devices in the permission dialog. Missing declarations cause immediate denial. When several iframes load the same address, Electron cannot distinguish the requester, so every candidate must declare the requested devices. “Allow once” approves the current request. Denying or closing the dialog rejects it. Browser policy and operating system permissions still apply.
+
+FrontendOnly mode loads the local frontend through `file://`. V2 iframes use the base sandbox and run with opaque origins. Camera and microphone requests are denied without an Electron permission dialog, even when `permissions` includes `camera` or `microphone`.
 
 以 `/extension-assets/` 开头的插件资源地址由宿主按配置的 Gateway API 基址解析；保留基址的路径前缀。没有显式 API 基址时保持同源相对地址。Electron FrontendOnly 的 file:// 页面使用桌面注入的 HTTP(S) API 基址；普通宿主相对网页和外部绝对地址保持原语义。iframe、来源展示和打开外链使用同一解析后的地址。
 
 插件文件 URL 的部署基址由宿主统一解析，前端不按文件所在后端进程查浏览器能力清单。HTML 继续通过原生 iframe URL 加载，保留相对 CSS 引用。
 
-srcDoc 不开放宿主权限；仍使用同一固定 sandbox。文档随语言变化重建；没有 src 时不显示打开外链按钮。
-
-宿主工具栏只读展示来源：URL 文档显示实际使用的 src（插件资源为解析后的 Gateway 地址），内联文档显示随宿主语言切换的“插件页面 / Plugin page”。来源文字可选择复制，超出可用宽度时单行省略，悬停显示完整值。此处不提供地址编辑，也不表示跨域 iframe 内部导航后的当前 URL。
+宿主工具栏提供手动刷新和 URL 模式下的外链按钮，加载超过 15 秒时提示慢加载。工具栏只读展示来源。URL 文档显示初始加载的实际地址（插件资源为解析后的 Gateway 地址），内联文档显示随宿主语言切换的“插件页面 / Plugin page”。来源文字可选择复制，超出可用宽度时单行省略，悬停显示完整值。iframe 内部跳转不会更新工具栏的来源。
 
 
 ### 4.19 Avatar
@@ -644,7 +710,7 @@ Gateway 仅支持展示型触发子树，不接受 icon。展示子树和菜单 
 | 整树、根节点和规模校验 | [schema.py](../../webui/schema.py)：validate_request、validate_root、_validate_node、_validate_events；[constants.py](../../webui/constants.py) | children、Tabs 内容遍历、专用根、预算和错误码 |
 | 已发布实例、版本与事件门禁 | [registry.py](../../webui/registry.py)、[action_validation.py](../../webui/action_validation.py)：validate_upstream、_find_node | 快照、节点路径、版本、action / args / data 核对 |
 | 后端渲染、清空和连接释放 | [runtime.py](../../webui/runtime.py)、[render_core.py](../../webui/core_handlers/render_core.py)、[action_core.py](../../webui/core_handlers/action_core.py) | 在何处拒绝、是否发布、旧实例与断连清理 |
-| 贡献发现与页面标题 | [contributions.py](../../webui/contributions.py)、[useWebUIPanels.tsx](../../../channels/web/frontend/src/features/webui/react/useWebUIPanels.tsx) | title、支持的 renderer / 根类型、实例与槽位映射 |
+| 贡献发现与页面标题 | [contributions.py](../../webui/contributions.py)、[useWebUIPanels.tsx](../../../channels/web/frontend/src/features/webui/react/useWebUIPanels.tsx) | title、跨会话稳定的 panelId、支持的 renderer / 根类型、实例与槽位映射 |
 | Gateway 转发 | [webui_handlers.py](../../../gateway/channel_manager/web/webui_handlers.py)、[transport.py](../../webui/transport.py)、[adapter.py](../../webui/adapter.py) | webui.dispatch、下行帧与错误转发；通常不解释组件 props，不能另加字段映射 |
 | 前端目录与默认值 | [componentCatalog.ts](../../../channels/web/frontend/src/features/webui/catalog/componentCatalog.ts)、[catalog/types.ts](../../../channels/web/frontend/src/features/webui/catalog/types.ts)、[catalog/components](../../../channels/web/frontend/src/features/webui/catalog/components) | 白名单、字段类型、required、defaults、validate、prepare、validateEvent |
 | 前端解析、规范化与不可变快照 | [protocol](../../../channels/web/frontend/src/features/webui/protocol)：checkPropValue、normalizeTree、process；[contracts](../../../channels/web/frontend/src/features/webui/contracts) | 与后端同样的类型和子节点规则、默认值、递归内容、版本和限制 |
@@ -675,10 +741,10 @@ Gateway 仅支持展示型触发子树，不接受 icon。展示子树和菜单 
 | Divider | divider.ts | webuiDivider：标题和方向 | 插件内容分段 |
 | Card | card.ts | webuiCard：标题、封面与内容 | 欢迎页、插件内容卡片 |
 | Tag | tag.ts | webuiTag：文案、状态色和链接 | 工作台标签、状态标识 |
-| Panel | panel.ts | webuiPanel：专用根容器 | ToolPanel / ExpandedPanel 的插件页签、工作区文件页签 |
+| Panel | panel.ts | webuiPanel：专用根容器；title / icon 供宿主页签使用 | ToolPanel / ExpandedPanel 的插件页签、工作区文件页签 |
 | FileTree | fileTree.ts | webuiFileTree：目录选择、展开、宽度及滚动恢复 | 工作区目录、Session Workspace Ops、文件预览联动 |
 | FilePreview | filePreview.ts | webuiFilePreview：文本、图片、PDF 与状态 | 受管文件下载 / 预览；内部 PDF iframe 不等于通用 Iframe 节点 |
-| Iframe | iframe.ts | webuiIframe：固定沙箱、活跃生命周期、最小宽度与刷新 | 右侧网页预览、侧栏主页面、任务主页面 |
+| Iframe | iframe.ts | webuiIframe：固定沙箱、活跃生命周期、最小宽度与刷新；title / icon 供宿主页签使用 | 右侧网页预览、侧栏主页面、任务主页面 |
 | Dropdown | dropdown.ts | webuiDropdown：图标或自定义触发区、菜单选择 | 侧栏用户菜单、轮次菜单 |
 | Icon | icon.ts | webuiIcon：白名单、尺寸与无障碍 | 独立装饰 / 语义图标 |
 | MediaSurface | mediaSurface.ts | webuiMediaSurface：图片、视频、沙箱页面、封面回退与消息协议 | 外观插件的应用背景 |
@@ -696,7 +762,7 @@ Gateway 仅支持展示型触发子树，不接受 icon。展示子树和菜单 
 | 侧栏菜单与用户入口：application.menu、application.sidebar.footer | [SessionSidebar/index.tsx](../../../channels/web/frontend/src/components/SessionSidebar/index.tsx) | 按钮、头像、Dropdown 触发区与菜单 |
 | 任务功能入口：task.function | [ConversationSidebar.tsx](../../../channels/web/frontend/src/multi-session/sidebar/ConversationSidebar.tsx) | 入口组件、导航及应用作用域 |
 | 菜单 / 任务主页面：application.menu.main、task.function.main | [App.tsx](../../../channels/web/frontend/src/App.tsx)、[WebUINavigation.tsx](../../../channels/web/frontend/src/features/webui/react/WebUINavigation.tsx)：WebUINavigationHost / WebUIPageHost | 普通树与 Iframe 专用根、页面切换 |
-| 右侧页签：conversation.panel.right | [ToolPanel/index.tsx](../../../channels/web/frontend/src/components/ToolPanel/index.tsx)、[ExpandedPanel.tsx](../../../channels/web/frontend/src/components/teamArea/ExpandedPanel.tsx)、[useWebUIPanels.tsx](../../../channels/web/frontend/src/features/webui/react/useWebUIPanels.tsx) | Panel / Iframe 的 title、页签选择、关闭、清理、滚动与隐藏生命周期 |
+| 右侧页签：conversation.panel.right | [ToolPanel/index.tsx](../../../channels/web/frontend/src/components/ToolPanel/index.tsx)、[ExpandedPanel.tsx](../../../channels/web/frontend/src/components/teamArea/ExpandedPanel.tsx)、[useWebUIPanels.tsx](../../../channels/web/frontend/src/features/webui/react/useWebUIPanels.tsx)、[useWebUIPluginPanelTabs.tsx](../../../channels/web/frontend/src/features/webui/react/useWebUIPluginPanelTabs.tsx)、[WebUIPluginPanelHome.tsx](../../../channels/web/frontend/src/features/webui/react/WebUIPluginPanelHome.tsx) | Panel / Iframe 的 title 与 icon、加号空白页签、选择后原地转插件页、页签关闭与相邻回退、空态、贡献消失裁剪、滚动与隐藏生命周期 |
 | 聊天标题和操作：conversation.header.title.after、conversation.header.actions | [ChatPanel/index.tsx](../../../channels/web/frontend/src/components/ChatPanel/index.tsx) | 文案、图标、Button 与 Dropdown |
 | 聊天输入区：conversation.input.above、conversation.input.below | [ChatPanel/index.tsx](../../../channels/web/frontend/src/components/ChatPanel/index.tsx) | 输入、选择、禁用、草稿和局部布局 |
 | 消息与轮次：message.assistant.meta、conversation.turn.footer.actions、conversation.session.content.after | [MessageItem.tsx](../../../channels/web/frontend/src/components/ChatPanel/MessageItem.tsx) | 消息归属、轮次操作、状态与事件参数 |
@@ -721,7 +787,7 @@ Gateway 仅支持展示型触发子树，不接受 icon。展示子树和菜单 
 | 修改默认值或 size / variant 语义 | 前端 defaults / prepare 与适配器回退、后端等价的缺省校验、主题和受影响宿主 |
 | 修改事件及 data | 插件 Handler、两端事件规则、action_validation、适配器 emit、runtime 门禁及共享事件用例 |
 | 新增 / 删除组件 | componentCatalog、componentRegistry、后端 COMPONENT_RULES、子节点 / 根限制、组件数量与示例 |
-| 改动 Panel / Iframe / MediaSurface 的根规则或 title | 两端槽位与整树规则、useWebUIPanels、页面导航、右侧宿主与背景宿主 |
+| 改动 Panel / Iframe / MediaSurface 的根规则、title 或 icon | 两端槽位与整树规则、useWebUIPanels、右侧加号空白页签、页面导航、右侧宿主与背景宿主 |
 | 修改图标集合 | 图标白名单与生成产物、图标引用方；本文只在 IconName 规则变化时修订 |
 | 不兼容变更 | 明确协议版本 / 兼容策略，更新插件安装副本并重新加载或重装；不能只升级前端 |
 

@@ -48,12 +48,23 @@ class AppManifest:
     permissions: list[str] = field(default_factory=list)
     source_session: str | None = None  # 来源会话 ID
     created_at: str = ""
+    pinned: bool = False
     description: str = ""
     icon_url: str = ""
     owner_id: str = ""
     editor_session_id: str = ""
     editor_create_token: str = ""
     startup_timeout_seconds: int = 30
+    # Distribution provenance. Local registrations keep the defaults so old
+    # manifests load unchanged.
+    source: str = "local"  # "local" | "hub"
+    hub_asset_id: str = ""
+    hub_url: str = ""
+    artifact_sha256: str = ""
+    requires_project: bool = False
+    project_id: str = ""
+    project_dir: str = ""
+    project_work_mode: str = ""
 
     def __post_init__(self) -> None:
         timeout = self.startup_timeout_seconds

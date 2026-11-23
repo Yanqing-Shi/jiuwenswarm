@@ -155,10 +155,8 @@ class SessionModeBusyError(ValueError):
 
 
 # Channels whose clients commit a Session's execution mode with mode.set and
-# read it back with mode.get. Every channel here shares one code path.
-MODE_SWITCH_CHANNELS = frozenset({"tui", "web"})
-# Sessions persisted before channel_id was recorded were created by the TUI.
-_UNCHANNELED_SESSION_OWNER = "tui"
+# read it back with mode.get.
+MODE_SWITCH_CHANNELS = frozenset({"web"})
 
 
 def normalize_switchable_session_mode(mode: Any) -> str | None:
@@ -173,10 +171,8 @@ def mode_switch_channel_owns(metadata: dict[str, Any], channel_id: str | None) -
     """Whether a mode-switch channel owns the Session these metadata describe."""
     if channel_id not in MODE_SWITCH_CHANNELS:
         return False
-    stored_channel_id = str(metadata.get("channel_id") or "").strip()
-    if not stored_channel_id:
-        return channel_id == _UNCHANNELED_SESSION_OWNER
-    return stored_channel_id == channel_id
+    # A Session without a recorded channel belongs to no mode-switch channel.
+    return str(metadata.get("channel_id") or "").strip() == channel_id
 
 
 def mode_switch_session_visible_to(
@@ -292,6 +288,22 @@ def compare_and_set_session_mode(
 
 def _mode_revision(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def _request_mode_keeps_committed_route(metadata: dict[str, Any], requested_mode: str) -> bool:
+    """Whether a request's explicit mode may replace the stored mode.
+
+    After mode.set committed a route (``mode_revision`` is present), a request
+    may change only plan state, which is entered and left without mode.set.
+    ``AgentRuntime.normalize_request`` applies the same rule to chat requests;
+    this keeps it for writers that reach the metadata without that step.
+    """
+    if "mode_revision" not in metadata:
+        return True
+    stored_mode = metadata.get("mode")
+    if not isinstance(stored_mode, str) or not stored_mode.strip():
+        return True
+    return base_mode_without_plan(requested_mode) == base_mode_without_plan(deprecate_mode(stored_mode))
 
 # 会话级 project 重绑版本号: 每次 rebind_session_project 自增。
 # _enqueue_write 入队时捕获当前值; worker 处理时若发现入队值 < 当前值,
@@ -1689,6 +1701,8 @@ def sync_session_request_metadata(
         时才覆盖磁盘值；未显式携带（如只读 RPC 用默认推断值）则保持磁盘原值，不腐蚀
         已锁定的会话 mode（如 team 会话被只读 RPC 默认推断成 agent）。调用方应传入
         canonical mode（"agent.plan"/"team"）。与 append_history_record 联动一致。
+        已由 mode.set 提交路由（存在 ``mode_revision``）的会话，请求只能改变计划态，
+        换路由的值被忽略。
       - persist_session：**初始化后不可变**。新 Session 由 ``session.create`` 显式写入；
         仅为兼容旧客户端，历史 metadata 缺字段时允许第一条旧式 chat 请求完成一次初始化，
         此后任何不一致请求只告警、不覆盖。
@@ -1850,13 +1864,22 @@ def sync_session_request_metadata(
         if mode is not None and explicit_mode_provided:
             new_mode = deprecate_mode(mode)
             old_mode = metadata.get("mode")
-            if new_mode != old_mode:
-                logger.info(
-                    "session_metadata 显式更新 mode: session=%s '%s' -> '%s' "
-                    "(raw=%r)",
-                    session_id, old_mode, new_mode, mode,
+            if not _request_mode_keeps_committed_route(metadata, new_mode):
+                # mode_revision guards only queued snapshots; a fresh request
+                # value would otherwise undo a committed mode.set.
+                logger.warning(
+                    "session_metadata 保留 mode.set 已提交的路由，忽略请求 mode: "
+                    "session=%s stored=%r requested=%r",
+                    session_id, old_mode, new_mode,
                 )
-            metadata["mode"] = new_mode
+            else:
+                if new_mode != old_mode:
+                    logger.info(
+                        "session_metadata 显式更新 mode: session=%s '%s' -> '%s' "
+                        "(raw=%r)",
+                        session_id, old_mode, new_mode, mode,
+                    )
+                metadata["mode"] = new_mode
         # channel_id：首次锁定——仅当磁盘值为空时写入，后续不覆盖
         # （与 project_dir/project_id/cron_id/user_id/work_mode 一致语义）
         if channel_id and not (

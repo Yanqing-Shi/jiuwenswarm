@@ -59,7 +59,7 @@ _LOCK_TIMEOUT_SEC = 10.0
 if sys.platform == "win32":
     import msvcrt
 
-    def _acquire(fd: int, *, blocking: bool = True) -> None:
+    def _acquire(fd: int, *, blocking: bool) -> None:
         # LK_LOCK retries once a second: a millisecond metadata write in
         # another process can otherwise delay admission by a full second.
         deadline = time.monotonic() + _LOCK_TIMEOUT_SEC
@@ -73,7 +73,7 @@ if sys.platform == "win32":
                 if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
                     raise
                 if not blocking:
-                    raise BlockingIOError(exc.errno, "resource operation is busy") from exc
+                    raise BlockingIOError("resource file lock is busy") from exc
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise OSError("timeout acquiring resource file lock") from exc
@@ -88,7 +88,7 @@ if sys.platform == "win32":
 else:
     import fcntl
 
-    def _acquire(fd: int, *, blocking: bool = True) -> None:
+    def _acquire(fd: int, *, blocking: bool) -> None:
         deadline = time.monotonic() + _LOCK_TIMEOUT_SEC
         while True:
             try:

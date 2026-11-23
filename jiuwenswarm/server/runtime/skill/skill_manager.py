@@ -49,19 +49,20 @@ from jiuwenswarm.common.utils import (
 from jiuwenswarm.enterprise import is_enterprise
 from jiuwenswarm.extensions.sdk.skill_source import (
     ArtifactDescriptor,
-    ArtifactRef,
     DownloadPolicy,
     InstalledArtifact,
     ProviderInvocationContext,
+    SkillArtifactVerificationError,
+    SkillCandidate,
     SkillRef,
     SkillSearchRequest,
     SkillSourceProvider,
+    SkillVerificationResult,
     SourceConfig,
     SkillSourceExtension,
 )
 from jiuwenswarm.server.runtime.skill.artifact_security import (
-    ArtifactVerificationError,
-    verify_skillhub_artifact,
+    verify_skill_download_hmac,
 )
 from jiuwenswarm.server.runtime.skill.skill_state_lock import (
     skill_state_lock,
@@ -161,11 +162,21 @@ _DETAIL_KEY_SKILLHUB_DETAIL_FAILED = "skills.swarmskillshub.errors.detailFailed"
 _SKILLHUB_DETAIL_DESC_MAX_CHARS = 200 * 1024
 
 # ZIP 解包配额（防 zip bomb）
-_SKILL_ZIP_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+SKILL_ZIP_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _SKILL_ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 _SKILL_ZIP_MAX_FILE_COUNT = 5000
 _SKILL_ZIP_MAX_SINGLE_FILE_BYTES = 32 * 1024 * 1024
 _SKILL_ZIP_MAX_PATH_DEPTH = 20
+
+
+def _discard_uploaded_skill_zip(src: Path) -> None:
+    """删除两阶段上传留下的临时 zip（仅限上传专属目录，best-effort）。"""
+    from jiuwenswarm.server.runtime.skill.skills_multipart_http import (
+        discard_skill_upload,
+    )
+
+    discard_skill_upload(str(src))
+
 
 # ---------------------------------------------------------------------------
 # 技能同步（Server / Client 分离部署）
@@ -626,6 +637,8 @@ _TEAM_SKILL_PLUGIN_TYPES = {"swarmskill", "swarm-skill", "teamskills", "team-ski
 _SINGLE_SKILL_PLUGIN_TYPES = {"skill", "skillpack"}
 
 _SKILL_DISPLAY_FILENAME = "skill_display.md"
+_BUILTIN_CATALOG_NAME = "workswarm-builtin"
+_BUILTIN_CATALOG_CAPABILITIES = ("references", "capabilities")
 # 个人版 UI 白名单：扁平内置技能 + 迁移后的 workswarm-builtin 目录技能。
 _BUILTIN_SKILL_UI_WHITELIST = frozenset(
     {
@@ -1830,6 +1843,8 @@ class SkillManager:
             raise ValueError(str(exc)) from exc
 
         skill_dir = self._resolve_local_skill_dir(name)
+        if skill_dir is None and not is_enterprise():
+            skill_dir = self._resolve_builtin_catalog_capability_dir(name)
         if skill_dir is None:
             raise SkillRpcError(ERROR_SKILL_NOT_FOUND, f"未找到 skill: {name}")
 
@@ -1853,6 +1868,8 @@ class SkillManager:
             raise ValueError(str(exc)) from exc
 
         skill_dir = self._resolve_local_skill_dir(name)
+        if skill_dir is None and not is_enterprise():
+            skill_dir = self._resolve_builtin_catalog_capability_dir(name)
         if skill_dir is None:
             raise SkillRpcError(ERROR_SKILL_NOT_FOUND, f"未找到 skill: {name}")
         try:
@@ -1879,6 +1896,8 @@ class SkillManager:
             raise ValueError(str(exc)) from exc
 
         skill_dir = self._resolve_local_skill_dir(name)
+        if skill_dir is None and not is_enterprise():
+            skill_dir = self._resolve_builtin_catalog_capability_dir(name)
         if skill_dir is None:
             raise SkillRpcError(ERROR_SKILL_NOT_FOUND, f"未找到 skill: {name}")
 
@@ -5941,35 +5960,49 @@ class SkillManager:
                 f"上传文件不存在: {path_str}",
             ) from exc
 
-        if not src.is_file():
-            raise SkillRpcError(ERROR_SKILL_INVALID_PACKAGE, "上传内容不是文件")
-        name_lower = src.name.lower()
-        if name_lower.endswith(".skill") or name_lower.endswith(".skill.zip"):
-            raise SkillRpcError(
-                ERROR_SKILL_INVALID_PACKAGE,
-                "仅接受 .zip 文件",
-            )
-        if not name_lower.endswith(".zip"):
-            raise SkillRpcError(
-                ERROR_SKILL_INVALID_PACKAGE,
-                "仅接受 .zip 文件",
-            )
+        try:
+            if not src.is_file():
+                raise SkillRpcError(ERROR_SKILL_INVALID_PACKAGE, "上传内容不是文件")
+            name_lower = src.name.lower()
+            if name_lower.endswith(".skill") or name_lower.endswith(".skill.zip"):
+                raise SkillRpcError(
+                    ERROR_SKILL_INVALID_PACKAGE,
+                    "仅接受 .zip 文件",
+                )
+            if not name_lower.endswith(".zip"):
+                raise SkillRpcError(
+                    ERROR_SKILL_INVALID_PACKAGE,
+                    "仅接受 .zip 文件",
+                )
 
-        size = src.stat().st_size
-        if size > _SKILL_ZIP_MAX_UPLOAD_BYTES:
-            raise SkillRpcError(
-                ERROR_SKILL_FILE_TOO_LARGE,
-                f"上传包超过限制（{_SKILL_ZIP_MAX_UPLOAD_BYTES} 字节）",
-            )
+            size = src.stat().st_size
+            if size > SKILL_ZIP_MAX_UPLOAD_BYTES:
+                raise SkillRpcError(
+                    ERROR_SKILL_FILE_TOO_LARGE,
+                    f"上传包超过限制（{SKILL_ZIP_MAX_UPLOAD_BYTES} 字节）",
+                )
 
-        with tempfile.TemporaryDirectory(prefix="jiuwenswarm_import_upload_") as tmpdir:
-            skill_dir = self._extract_skill_package_file(src, Path(tmpdir))
-            return self._install_imported_skill_dir(
-                skill_dir,
-                force=overwrite,
-                origin="file-api:upload",
-                conflict_code=ERROR_SKILL_ALREADY_EXISTS,
-            )
+            with tempfile.TemporaryDirectory(prefix="jiuwenswarm_import_upload_") as tmpdir:
+                skill_dir = self._extract_skill_package_file(src, Path(tmpdir))
+                result = self._install_imported_skill_dir(
+                    skill_dir,
+                    force=overwrite,
+                    origin="file-api:upload",
+                    conflict_code=ERROR_SKILL_ALREADY_EXISTS,
+                )
+        except SkillRpcError as exc:
+            # 同名冲突时保留上传文件，等待前端覆盖确认后的二次导入。
+            if exc.code not in (
+                ERROR_SKILL_ALREADY_EXISTS,
+                ERROR_SKILL_IMPORT_OVERWRITE_REQUIRED,
+            ):
+                _discard_uploaded_skill_zip(src)
+            raise
+        except Exception:  # noqa: BLE001 - 清理后仍向上抛出原始异常
+            _discard_uploaded_skill_zip(src)
+            raise
+        _discard_uploaded_skill_zip(src)
+        return result
 
     async def handle_skills_create_from_knowledge(self, params: dict) -> dict:
         """知识转 Skill：校验输入并准备隔离临时目录与 Agent follow-up.
@@ -6003,10 +6036,10 @@ class SkillManager:
             if not src.is_file():
                 raise SkillRpcError(ERROR_SKILL_INVALID_PACKAGE, "知识文档不是文件")
             size = src.stat().st_size
-            if size > _SKILL_ZIP_MAX_UPLOAD_BYTES:
+            if size > SKILL_ZIP_MAX_UPLOAD_BYTES:
                 raise SkillRpcError(
                     ERROR_SKILL_FILE_TOO_LARGE,
-                    f"知识文档超过限制（{_SKILL_ZIP_MAX_UPLOAD_BYTES} 字节）",
+                    f"知识文档超过限制（{SKILL_ZIP_MAX_UPLOAD_BYTES} 字节）",
                 )
             file_path = str(src)
 
@@ -7454,6 +7487,15 @@ class SkillManager:
                 if meta is not None:
                     results.append(meta)
 
+        # workswarm-builtin 在执行面仍是一个按需读取的目录型 Skill；这里只把
+        # capabilities 下的成员投影到“我的技能”，便于逐项查看和启停，不把它们
+        # 搬回顶层目录，也不改变 Harness 的单入口发现边界。
+        if not is_enterprise():
+            existing_names = {str(item.get("name") or "") for item in results}
+            for meta in self._scan_builtin_catalog_capabilities(language=language):
+                if str(meta.get("name") or "") not in existing_names:
+                    results.append(meta)
+
         # 2) connected MCP skill dirs (only connected MCPs). skill_installer
         # normalizes all MCP skills to the nested shape mcp/skills/<name>/<skill>/,
         # so each child dir here is one skill (no flat-layout special case).
@@ -7468,6 +7510,63 @@ class SkillManager:
                 if meta is not None:
                     results.append(meta)
 
+        return results
+
+    def _builtin_catalog_capabilities_dir(self) -> Path | None:
+        """返回工作区内置目录 Skill 的 capabilities 根目录。"""
+        catalog = self._skills_dir / _BUILTIN_CATALOG_NAME
+        root = catalog.joinpath(*_BUILTIN_CATALOG_CAPABILITIES)
+        try:
+            if catalog.is_symlink() or root.is_symlink() or not _is_dir_long(root):
+                return None
+            if not root.resolve().is_relative_to(catalog.resolve()):
+                return None
+        except (OSError, RuntimeError):
+            return None
+        return root
+
+    def _resolve_builtin_catalog_capability_dir(self, skill_name: str) -> Path | None:
+        """按目录名定位目录 Skill 内的一个内置能力，不回退 frontmatter 别名。"""
+        root = self._builtin_catalog_capabilities_dir()
+        if root is None:
+            return None
+        try:
+            child = _safe_child_path(root, skill_name, "skill")
+            if child.is_symlink() or not _is_dir_long(child):
+                return None
+            if not child.resolve().is_relative_to(root.resolve()):
+                return None
+        except (OSError, RuntimeError, ValueError):
+            return None
+        return child if self._try_find_skill_file(child) is not None else None
+
+    def _scan_builtin_catalog_capabilities(self, *, language: str) -> list[dict[str, Any]]:
+        """把目录 Skill 的成员投影为已安装内置技能卡片。"""
+        root = self._builtin_catalog_capabilities_dir()
+        if root is None:
+            return []
+        results: list[dict[str, Any]] = []
+        for child in sorted(root.iterdir(), key=lambda path: path.name):
+            if child.name.startswith((".", "_")) or child.is_symlink() or not _is_dir_long(child):
+                continue
+            meta = self._scan_one_skill_dir(child, source_default="builtin", language=language)
+            if meta is None:
+                continue
+            meta.update(
+                {
+                    "name": child.name,
+                    "source": "builtin",
+                    "source_type": "builtin",
+                    "is_builtin": True,
+                    "is_builtin_source": True,
+                    "installed": True,
+                    "enabled": self.get_skill_enabled(child.name),
+                    "proprietary": child.name in _load_proprietary_builtin_names(),
+                    "has_evolutions": False,
+                    "catalog_parent": _BUILTIN_CATALOG_NAME,
+                }
+            )
+            results.append(meta)
         return results
 
     def _scan_one_skill_dir(
@@ -8197,6 +8296,20 @@ class SkillManager:
                 matched = self._skill_dir_get_payload(child, request_name=name)
                 if matched is not None:
                     return matched
+
+        if not is_enterprise():
+            catalog_capability = self._resolve_builtin_catalog_capability_dir(name)
+            if catalog_capability is not None:
+                return catalog_capability, {
+                    "name": name,
+                    "source": "builtin",
+                    "source_type": "builtin",
+                    "display_name": name,
+                    "is_builtin": True,
+                    "is_builtin_source": True,
+                    "proprietary": name in _load_proprietary_builtin_names(),
+                    "installed": True,
+                }
 
         # marketplace 未安装副本（只支持读 workspace 语义，无本地产品版本）
         if _exists_long(self._marketplace_dir):
@@ -11457,6 +11570,56 @@ class SkillManager:
             "providers": [item.to_dict() for item in self._source_registry.list()],
         }
 
+    @staticmethod
+    def _skill_candidate_to_host_card(candidate: SkillCandidate) -> dict[str, Any]:
+        """Map SPI ``SkillCandidate`` onto the enterprise skills.source.search card.
+
+        Keeps SPI display fields (``short_description`` / ``tags``) and lifts market
+        extras from ``metadata`` to top-level for the UI. Does not emit legacy
+        ``summary`` / ``labels`` aliases.
+        """
+        raw = candidate.to_dict()
+        meta = dict(raw.get("metadata") or {})
+        short_description = str(
+            raw.get("short_description") or meta.get("summary") or meta.get("short_desc") or ""
+        ).strip()
+        tags = [str(tag).strip() for tag in (raw.get("tags") or ()) if str(tag).strip()]
+        if not tags:
+            raw_labels = meta.get("labels")
+            if isinstance(raw_labels, list):
+                for item in raw_labels:
+                    if isinstance(item, dict):
+                        label = str(item.get("name") or item.get("label") or "").strip()
+                    else:
+                        label = str(item or "").strip()
+                    if label:
+                        tags.append(label)
+        card: dict[str, Any] = {
+            **raw,
+            "short_description": short_description or None,
+            "tags": tags,
+        }
+        for key in (
+            "namespace",
+            "slug",
+            "canonical_slug",
+            "owner_display_name",
+            "homepage",
+            "rating_avg",
+            "rating_count",
+            "download_count",
+            "updated_at",
+            "previous_version",
+            "fingerprint",
+            "accessible",
+            "asset_type",
+        ):
+            if key in card and card.get(key) not in (None, "", (), []):
+                continue
+            if key in meta and meta.get(key) not in (None, ""):
+                card[key] = meta[key]
+        return {key: value for key, value in card.items() if value is not None}
+
     async def handle_skills_source_search(self, params: dict) -> dict:
         """Dispatch a normalized search request to one Skill Source Provider."""
         source_id = str(params.get("source_id") or "").strip()
@@ -11509,7 +11672,7 @@ class SkillManager:
                         "source_response_invalid", "provider returned a duplicate artifact"
                     )
                 seen.add(identity)
-                items.append(candidate.to_dict())
+                items.append(self._skill_candidate_to_host_card(candidate))
             return {
                 "success": True,
                 "source": source_id,
@@ -11551,20 +11714,18 @@ class SkillManager:
         skill_id: str,
         version_id: str,
     ) -> None:
-        artifact_ref = descriptor.artifact_ref
         if (
-            artifact_ref.skill_ref.source_id != source_id
-            or artifact_ref.skill_ref.skill_id != skill_id
-            or artifact_ref.version_id != version_id
+            str(descriptor.source_id or "").strip() != source_id
+            or str(descriptor.skill_id or "").strip() != skill_id
+            or str(descriptor.version_id or "").strip() != version_id
         ):
             raise SourceRegistryError(
-                "source_response_invalid", "provider returned a different ArtifactRef"
+                "source_response_invalid",
+                "provider returned a different artifact identity",
             )
-        checksum = str(descriptor.checksum_sha256 or "").strip().lower()
-        artifact_sha = str(descriptor.artifact_sha256 or "").strip().lower()
-        for value in (checksum, artifact_sha):
-            if value and not re.fullmatch(r"[0-9a-f]{64}", value):
-                raise SourceRegistryError("source_response_invalid", "invalid artifact SHA-256")
+        content_sha = str(descriptor.content_sha256 or "").strip().lower()
+        if content_sha and not re.fullmatch(r"[0-9a-f]{64}", content_sha):
+            raise SourceRegistryError("source_response_invalid", "invalid artifact SHA-256")
 
     async def _fetch_verified_source_artifact(
         self,
@@ -11610,9 +11771,47 @@ class SkillManager:
             )
         try:
             verification = await provider.verify_artifact(descriptor, body)
-        except ArtifactVerificationError as exc:
+        except SkillArtifactVerificationError as exc:
             raise SourceRegistryError(exc.code, str(exc)) from exc
-        return descriptor, body, dict(verification) if verification is not None else None
+        return descriptor, body, self._coerce_source_verification_audit(verification)
+
+    @staticmethod
+    def _coerce_source_verification_audit(verification: Any) -> dict[str, Any] | None:
+        """Map Provider verify_artifact outcome to install ledger audit.
+
+        SPI contract: ``None`` skips signature checks; success returns
+        ``SkillVerificationResult(verified=True, ...)``; failures raise.
+        Soft ``verified=False`` or unknown return types must not install.
+        """
+        if verification is None:
+            return None
+        if isinstance(verification, SkillVerificationResult):
+            if verification.verified is not True:
+                raise SourceRegistryError(
+                    "artifact_signature_invalid",
+                    "artifact verification did not succeed",
+                )
+            audit = {
+                "verified": True,
+                "artifact_sha256": verification.content_sha256,
+                "content_sha256": verification.content_sha256,
+                "algorithm": verification.algorithm,
+                "scope": verification.scope,
+                "key_id": verification.key_id,
+                "verified_at": verification.verified_at,
+            }
+            return {k: v for k, v in audit.items() if v is not None}
+        if isinstance(verification, dict):
+            if verification.get("verified") is not True:
+                raise SourceRegistryError(
+                    "artifact_signature_invalid",
+                    "artifact verification did not succeed",
+                )
+            return dict(verification)
+        raise SourceRegistryError(
+            "source_response_invalid",
+            "provider verify_artifact returned an unsupported result",
+        )
 
     @staticmethod
     def _resolve_source_skill_author(*sources: Any) -> str:
@@ -12091,7 +12290,6 @@ class SkillManager:
                         "has_update": bool(status.has_update),
                         "fingerprint_matched": status.fingerprint_matched,
                         "accessible": status.accessible,
-                        "downloadable": status.downloadable,
                         "remote_status": status.remote_status,
                         "error_code": status.error_code,
                         "checked_at": checked_at,
@@ -12109,7 +12307,6 @@ class SkillManager:
                             "latest_version": status.latest_version,
                             "fingerprint_matched": status.fingerprint_matched,
                             "accessible": status.accessible,
-                            "downloadable": status.downloadable,
                             "remote_status": status.remote_status,
                             "update_checked_at": checked_at,
                         }
@@ -12355,10 +12552,6 @@ class SkillManager:
 
     async def handle_skills_web_install(self, params: dict) -> dict:
         """企业 Web 安装兼容入口：下载、校验、落盘并提交 workspace JSON。"""
-        from jiuwenswarm.server.runtime.skill.artifact_security import (
-            verify_skill_download_hmac,
-        )
-
         url = str(params.get("url") or "").strip()
         signature = str(params.get("signature") or "").strip()
         if not url:

@@ -114,7 +114,11 @@ async def _suspend(hosts, stored, monkeypatch, mode, count):
     state = instance.loop_session.get_state(INTERRUPTION_KEY)
     assert [call.index for call in state.ai_message.tool_calls] == list(range(count))
     reference = instance.loop_session.get_state(snapshots.SNAPSHOT_KEY)
-    raw = json.loads((snapshots.snapshot_directory(stored.sid) / reference["file"]).read_text())
+    raw = json.loads(
+        (snapshots.snapshot_directory(stored.sid) / reference["file"]).read_text(
+            encoding="utf-8"
+        )
+    )
     pending_ids = {call.id for call in state.ai_message.tool_calls}
     saved_calls = [call for context in raw["contexts"].values() for message in context["messages"]
                    for call in message.get("tool_calls", []) if call["id"] in pending_ids]
@@ -314,7 +318,11 @@ async def test_two_tool_batches_keep_consumption_through_real_runtime_and_restar
     reference = instance.loop_session.get_state(snapshots.SNAPSHOT_KEY)
     if storage == "snapshot":
         assert "first-answer" in committed[0].covered_requests
-        raw = json.loads((snapshots.snapshot_directory(stored.sid) / reference["file"]).read_text())
+        raw = json.loads(
+            (snapshots.snapshot_directory(stored.sid) / reference["file"]).read_text(
+                encoding="utf-8"
+            )
+        )
         assert raw["source"]["offset"] > 0 or "original-query" in raw["covered_requests"]
     else:
         # The shared record is the window's only durable copy.
