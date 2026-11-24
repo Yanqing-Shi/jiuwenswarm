@@ -167,6 +167,19 @@ def normalize_switchable_session_mode(mode: Any) -> str | None:
     return resolved if resolved in NEW_CANONICAL_MODES and resolved != "team.design" else None
 
 
+def switch_target_for_route(current_mode: Any, route: str) -> str | None:
+    """Return the switchable mode on ``route`` that keeps the profile and plan state.
+
+    ``route`` is ``agent`` or ``team``; ``agent.code.plan`` routed to ``team``
+    gives ``team.code.plan``. None when either side is not a switchable mode.
+    """
+    current = normalize_switchable_session_mode(current_mode)
+    if current is None or route not in {"agent", "team"}:
+        return None
+    _, _, profile_and_state = current.partition(".")
+    return normalize_switchable_session_mode(f"{route}.{profile_and_state}")
+
+
 def mode_switch_channel_owns(metadata: dict[str, Any], channel_id: str | None) -> bool:
     """Whether a mode-switch channel owns the Session these metadata describe."""
     if channel_id not in MODE_SWITCH_CHANNELS:

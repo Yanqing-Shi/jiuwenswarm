@@ -18,6 +18,7 @@ generated: true
 | [docs](#module-docs) |
 | [gateway/channel_manager/web](#module-gateway-channel_manager-web) |
 | [jiuwenswarm](#module-jiuwenswarm) |
+| [jiuwenswarm/agents](#module-jiuwenswarm-agents) |
 | [jiuwenswarm/agents/harness](#module-jiuwenswarm-agents-harness) |
 | [jiuwenswarm/agents/harness/common](#module-jiuwenswarm-agents-harness-common) |
 | [jiuwenswarm/agents/harness/common/memory](#module-jiuwenswarm-agents-harness-common-memory) |
@@ -88,6 +89,14 @@ generated: true
 | ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
 |---|---|---|---|---|
 | [F_20261030_2018_teammate-swarmflow-adaptation](F_20261030_2018_teammate-swarmflow-adaptation.md) | F | 集群模式teammate支持swarmflow工具（jiuwenswarm 侧适配） | @xiajing | 无独立 D：本仓侧为 teammate 接入 swarmflow 的适配与硬化，无独立设计文档。 |
+
+<a id="module-jiuwenswarm-agents"></a>
+
+## jiuwenswarm/agents
+
+| ID / 文档 | 类型 | 标题 | 作者 | 关联 D |
+|---|---|---|---|---|
+| [F_20261120_0644_web-mode-router-auto](F_20261120_0644_web-mode-router-auto.md) | F | Web“自动”复选框：由模式路由在每次运行前选择 Agent / Team（mode.route） | Yanqing-Shi | 无独立 D：无独立 D。方案在开发会话中以计划形式与用户逐项确认（见“用户确认的决定”），建立在 F_20261116_1710_web-session-mode-switch 的 mode.set / mode.get 之上。 |
 
 <a id="module-jiuwenswarm-agents-harness"></a>
 
@@ -219,6 +228,7 @@ generated: true
 | [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 会话内模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次在服务端新增 mode.set / mode.get，只受理 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
 | [F_20261117_1752_colleague-swarmchat](F_20261117_1752_colleague-swarmchat.md) | F | AI 同事接入 SwarmChat 实施记录 | weichenhao | D-20261116-1201-colleague-swarmchat-membership（非本仓或待定位） |
 | [F_20261119_1039_app-hub](F_20261119_1039_app-hub.md) | F | Hub 应用分发与本地安装实施 | kdgmpw | 无独立 D：设计输入为仓库外部的《App Hub 应用资产方案设计》与《App Hub 双仓实施方案》，未在 .agents/agent-docs/designs 建立 D 记录。 |
+| [F_20261120_0644_web-mode-router-auto](F_20261120_0644_web-mode-router-auto.md) | F | Web“自动”复选框：由模式路由在每次运行前选择 Agent / Team（mode.route） | Yanqing-Shi | 无独立 D：无独立 D。方案在开发会话中以计划形式与用户逐项确认（见“用户确认的决定”），建立在 F_20261116_1710_web-session-mode-switch 的 mode.set / mode.get 之上。 |
 
 <a id="module-jiuwenswarm-channels-web-frontend-src-features-settings"></a>
 
@@ -250,6 +260,7 @@ generated: true
 | [F_20261111_1755_team-leader-goal](F_20261111_1755_team-leader-goal.md) | F | 调度模式领导目标驱动设置实施与验证 | alan_cheng | [D-20261111-1722-team-goal-config](../designs/active/D-20261111-1722-team-goal-config/design.md) |
 | [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 会话内模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次在服务端新增 mode.set / mode.get，只受理 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
 | [F_20261119_1624_beta3-extensions-develop-port](F_20261119_1624_beta3-extensions-develop-port.md) | F | beta3 扩展能力线性迁入 develop | lizhiyuan | 无独立 D：按用户明确确认的逐笔迁移、保留 develop 行为和 Gateway 跨仓边界执行；本次没有另立设计，原扩展契约沿用模块内规约。 |
+| [F_20261120_0644_web-mode-router-auto](F_20261120_0644_web-mode-router-auto.md) | F | Web“自动”复选框：由模式路由在每次运行前选择 Agent / Team（mode.route） | Yanqing-Shi | 无独立 D：无独立 D。方案在开发会话中以计划形式与用户逐项确认（见“用户确认的决定”），建立在 F_20261116_1710_web-session-mode-switch 的 mode.set / mode.get 之上。 |
 
 <a id="module-jiuwenswarm-common-config_panel"></a>
 
@@ -346,6 +357,7 @@ generated: true
 | [F_20261103_1501_app-role-session](app-role-session.md) | F | 保留基础系统提示的轻量 NPC 会话 | kdgmpw | [D-20261103-1444-app-role-session](../designs/active/D-20261103-1444-app-role-session/design.md) |
 | [F_20261104_1225_npc-team-member-sessions](F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](../designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
 | [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 会话内模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次在服务端新增 mode.set / mode.get，只受理 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
+| [F_20261120_0644_web-mode-router-auto](F_20261120_0644_web-mode-router-auto.md) | F | Web“自动”复选框：由模式路由在每次运行前选择 Agent / Team（mode.route） | Yanqing-Shi | 无独立 D：无独立 D。方案在开发会话中以计划形式与用户逐项确认（见“用户确认的决定”），建立在 F_20261116_1710_web-session-mode-switch 的 mode.set / mode.get 之上。 |
 
 <a id="module-jiuwenswarm-server"></a>
 
@@ -356,6 +368,7 @@ generated: true
 | [F_20261104_1225_npc-team-member-sessions](F_20261104_1225_npc-team-member-sessions.md) | F | NPC 主从会话与成员咨询 | kdgmpw | [D-20261104-1141-npc-team-member-sessions](../designs/active/D-20261104-1141-npc-team-member-sessions/design.md) |
 | [F_20261116_1710_web-session-mode-switch](F_20261116_1710_web-session-mode-switch.md) | F | Web 会话内模式切换（mode.set / mode.get） | Yanqing-Shi | 无独立 D：无独立 D。本次在服务端新增 mode.set / mode.get，只受理 Web 通道，方案在开发会话中与用户确认，未单独立项设计。 |
 | [F_20261119_1624_beta3-extensions-develop-port](F_20261119_1624_beta3-extensions-develop-port.md) | F | beta3 扩展能力线性迁入 develop | lizhiyuan | 无独立 D：按用户明确确认的逐笔迁移、保留 develop 行为和 Gateway 跨仓边界执行；本次没有另立设计，原扩展契约沿用模块内规约。 |
+| [F_20261120_0644_web-mode-router-auto](F_20261120_0644_web-mode-router-auto.md) | F | Web“自动”复选框：由模式路由在每次运行前选择 Agent / Team（mode.route） | Yanqing-Shi | 无独立 D：无独立 D。方案在开发会话中以计划形式与用户逐项确认（见“用户确认的决定”），建立在 F_20261116_1710_web-session-mode-switch 的 mode.set / mode.get 之上。 |
 
 <a id="module-jiuwenswarm-server-control"></a>
 

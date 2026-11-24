@@ -89,9 +89,12 @@ import {
   type DesktopLocalFilesEventDetail,
   type LocalFilePick,
 } from '../../features/workspace/localFilePicker';
-import { useDesktopLocalFilePickerReady, useWelcomeBubblePosition } from '../../hooks';
+import { resolveOutgoingMode, useDesktopLocalFilePickerReady, useWelcomeBubblePosition } from '../../hooks';
 import { flushApplicationConversationHistory } from '../../applicationPlugins/ApplicationPluginOutlet';
 import { beginPromptSubmit, endPromptSubmit, queueDrainsInMode } from '../../features/sessionMode/modeSwitchGate';
+import { routePromptBeforeRun, routesPromptBeforeRun } from '../../features/sessionMode/autoRouteState';
+import { useWorkflowAutorun } from '../../features/sessionMode/useWorkflowAutorun';
+import { ModeRouteConfirmDialog } from '../../features/sessionMode/ModeRouteConfirmDialog';
 import { toast } from '../ui/Toast/toastStore';
 import { useOrganizationConversationKey } from '../../features/teamOrganization/conversation';
 import { useOrganizationProcessing } from '../../features/teamOrganization/processing';
@@ -526,8 +529,9 @@ export function AgentActivityCard({
     e.stopPropagation();
     const sid = useChatStore.getState().activeSessionId;
     if (!sid) return;
-    // Steering waits for a pending mode switch like every other queued prompt.
-    if (useChatStore.getState().getRuntime(sid)?.modeSwitchPending) return;
+    // Steering waits for a pending mode switch or mode decision like every other queued prompt.
+    const pending = useChatStore.getState().getRuntime(sid);
+    if (pending?.modeSwitchPending || pending?.modeRoutePending) return;
     onSendTask?.(content, mediaItems, { queuedTaskId: taskId });
   };
 
@@ -2077,17 +2081,70 @@ export const ChatPanel = React.memo(function ChatPanel({
   const handleSendMessage = useCallback(
     async (content: string, mediaItems?: MediaItem[], options?: ChatSendOptions | ChatInputProvenance) => {
       const queued = options && 'queuedTaskId' in options;
+      const submittingSessionId = activeSessionId;
+      const chat = useChatStore.getState();
+      // With "auto" on, the mode router is still deciding for an earlier
+      // prompt of this conversation: this one waits behind it in the queue.
+      if (!queued && submittingSessionId && chat.getRuntime(submittingSessionId)?.modeRoutePending) {
+        if (submittingSessionId !== NEW_CONVERSATION_ID && (content.trim() || mediaItems?.length)) {
+          chat.addToTaskQueue(submittingSessionId, content, mediaItems);
+        }
+        return;
+      }
       // Capture submission provenance before awaiting the history flush.
       const nextInput = queued ? null : takeNextInputSubmission(content);
       // From here the prompt counts as sent: a mode switch must not overtake it
       // while the flush below is awaited. The send path sets the processing
       // flag synchronously, which takes over once the marker ends.
-      const submittingSessionId = activeSessionId;
       beginPromptSubmit(submittingSessionId);
+      // With "auto" on, a prompt that starts a run goes to the mode router
+      // first. Input to a running turn (a message to the Team Leader, a steered
+      // queue item) is not routed.
+      const routing =
+        !queued && routesPromptBeforeRun(submittingSessionId) && !chat.getRuntime(submittingSessionId)?.isProcessing
+          ? submittingSessionId
+          : null;
+      // Other prompts wait in the queue until this one is on its way.
+      const endRouting = () => {
+        if (routing) useChatStore.getState().setModeRoutePending(routing, false);
+      };
+      if (routing) {
+        chat.setModeRoutePending(routing, true);
+        const draft = routing === NEW_CONVERSATION_ID;
+        const verdict = await routePromptBeforeRun({
+          sessionId: routing,
+          query: content,
+          draftMode: draft
+            ? resolveOutgoingMode(routing, useSessionStore.getState().getRuntime(routing)?.mode)
+            : undefined,
+        }).catch((error): 'run' => {
+          console.warn('Mode routing failed; the prompt keeps its mode:', error);
+          return 'run';
+        });
+        // The send below goes to the conversation on screen, which may have changed meanwhile.
+        const left = useChatStore.getState().activeSessionId !== routing;
+        if (verdict === 'hold' || left) {
+          const store = useChatStore.getState();
+          if (draft) {
+            // A draft has no queue; the text goes back to its composer.
+            store.setInputValue(routing, content);
+          } else {
+            store.addToTaskQueue(routing, content, mediaItems, { routed: verdict === 'run' });
+            // A needed switch did not commit: the prompt is not sent in the old mode.
+            if (verdict === 'hold') store.setQueuePaused(routing, true);
+          }
+          endPromptSubmit(submittingSessionId);
+          endRouting();
+          nextInput?.settle(false);
+          if (!draft && verdict === 'run') onDrainTaskQueueIfIdle?.(routing);
+          return;
+        }
+      }
       try {
         if (activeSessionId) await flushApplicationConversationHistory(activeSessionId);
       } catch (error) {
         endPromptSubmit(submittingSessionId);
+        endRouting();
         nextInput?.settle(false);
         toast.open({ content: error instanceof Error ? error.message : t('network.requestFailed'), variant: 'error' });
         return;
@@ -2098,6 +2155,7 @@ export const ChatPanel = React.memo(function ChatPanel({
           onSendMessage(content, mediaItems, options);
         } finally {
           endPromptSubmit(submittingSessionId);
+          endRouting();
         }
         return;
       }
@@ -2113,6 +2171,7 @@ export const ChatPanel = React.memo(function ChatPanel({
         sending = onSendMessage(content, mediaItems, nextInput.provenance);
       } finally {
         endPromptSubmit(submittingSessionId);
+        endRouting();
       }
       const sent = Promise.resolve(sending).then(
         sessionId => nextInput.settle(Boolean(sessionId)),
@@ -2126,8 +2185,19 @@ export const ChatPanel = React.memo(function ChatPanel({
         console.error('topic_starters direct-input lineage was not recorded:', error);
       });
     },
-    [activeSessionId, ensureTopicStarterExposureAcknowledged, onSendMessage, sendTopicStarterEvent, takeNextInputSubmission, t],
+    [
+      activeSessionId,
+      ensureTopicStarterExposureAcknowledged,
+      onDrainTaskQueueIfIdle,
+      onSendMessage,
+      sendTopicStarterEvent,
+      takeNextInputSubmission,
+      t,
+    ],
   );
+
+  // A workflow handed over in the address submits its prompts through the same path as the composer.
+  useWorkflowAutorun({ isConnected, send: handleSendMessage });
 
   const handleEmptyComposerTab = useCallback(() => acceptNextInputSuggestion('tab'), [acceptNextInputSuggestion]);
 
@@ -2790,6 +2860,7 @@ export const ChatPanel = React.memo(function ChatPanel({
       <div className="chat-ai-disclaimer" data-testid="chat-panel-ai-disclaimer">
         {t('share.aiNotice')}
       </div>
+      <ModeRouteConfirmDialog sessionId={activeSessionId} />
       {agentGroupDeletedNoticeOpen && (
         <div className="conversation-dialog" role="dialog" aria-modal="true" aria-label={t('chat.agentGroupDeletedTitle')} data-testid="agent-group-deleted-dialog">
           <button type="button" className="conversation-dialog__backdrop" onClick={() => setAgentGroupDeletedNoticeOpen(false)} aria-label={t('common.close')} />

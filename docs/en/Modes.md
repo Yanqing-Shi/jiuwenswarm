@@ -27,6 +27,45 @@ A conversation that already has messages can switch between Agent and Team mode 
 - A committed switch increments `mode_revision` in the Session's `metadata.json` and appends a `session.mode_changed` record to `history.jsonl`.
 - It applies to the personal edition over WebSocket. The enterprise edition chooses the mode when a conversation starts: once the conversation has messages the mode selector is locked, and the server refuses `mode.set`. Leaving Auto Harness still starts a new conversation.
 
+### Auto: let a mode router choose Agent or Team
+
+When the server has a mode router configured, the chat input shows an **Auto** checkbox next to the mode selector. A mode router is a separate local service that reads a prompt with the earlier tasks of the conversation and answers "Agent" or "Team". It is optional and off by default.
+
+- **Auto unchecked** (default): you switch mode by hand, as described above.
+- **Auto checked**: the mode selector is locked and shows the mode in use. Before each run starts, the prompt goes to the router; if the router picks the other mode, the conversation switches in place and the prompt then runs.
+- **Alert** appears while Auto is checked and is checked by default. With Alert on, each switch the router decides opens a confirmation: accept to switch, deny (or Esc) to keep the current mode. The prompt runs either way. With Alert off, the switch happens without asking.
+- Both boxes are one setting for all conversations, remembered in the browser.
+- The router is asked only when the conversation is idle, so it reads the result of the previous run. A prompt sent during a run waits in the queue and is routed when its turn comes. Input to a running turn is not routed: a message sent while a Team run is going, and a queued prompt pushed with "send now".
+- If the router does not answer, the prompt runs in the current mode. If a routed switch is refused (for example the conversation is still stopping), the prompt stays in the queue and the queue pauses.
+- Conversations bound to an agent group, an external agent, or a scheduled task, and application role (NPC) conversations, are not routed.
+
+The router answers the `mode.route` request; the switch itself is still committed with `mode.set`. Configure the router in `config.yaml`:
+
+```yaml
+mode_router:
+  url: ""              # router address; empty = off. The MODE_ROUTER_URL environment variable overrides it.
+  timeout_seconds: 3   # how long to wait for an answer
+  history_items: 20    # how many earlier items (prompts and answers) are kept; the earliest go out first; 0 = all
+  history_chars: 0     # optional cap: longest text kept per earlier prompt or answer; 0 = in full
+  query_chars: 0       # optional cap: longest text kept of the new prompt; 0 = in full
+```
+
+Routing is per task. A task is one run: the prompt that starts it, any prompt sent into it while it is going, and its final answer. For the first task the router gets the prompt alone; later it gets everything the person typed before and every run's final answer, in recorded order, then the new prompt: prompt 1, answer 1, prompt 2, a prompt sent during run 2, answer 2, …, prompt N. The earlier texts are the items of `history` (`user` for a prompt, `assistant` for an answer; they do not have to alternate), the new prompt is `query`. No system prompt, tools, tool calls or intermediate messages are sent.
+
+- Every typed prompt is included. One sent into a run that was already going (a message to the Leader while a Team round is running, a queued prompt pushed with "send now") stays in its place and carries `"during_run": true`; it starts no task and is not routed itself. A prompt sent to a Team that has finished its round starts a task of its own.
+- Each run gives one answer, its last final answer; an earlier interim answer of the same run is left out. For a Team task it is the Leader's answer; answers of Team members are not sent.
+- A run that ended without a final answer (stopped, failed) gives its prompts alone.
+- Not included: turns started by another conversation or a heartbeat with their answers, goal objectives, answers to permission questions.
+- Only the latest `history_items` items are kept (a prompt or an answer is one item; the new prompt is not counted). When one more comes in, the earliest goes out, also from the middle of a task. The stored container is cut the same way; the history keeps everything.
+
+These texts are kept per conversation in `mode_router_tasks.jsonl`, next to `history.jsonl` in the session folder. A row is added when a typed prompt or a final answer is written to the history, so routing does not search the event records of a run. The history stays the source: a container that is missing, behind, or left over from a replaced history file is rebuilt from the history on the next routing request. The file is only kept while a router is configured.
+
+The router is any HTTP service with two endpoints: `GET /health`, and `POST /v1/route` taking `{request_id, session_id, query, current_mode, work_mode, history}` and returning `{"mode": "agent" | "team", "confidence"?, "reason"?}`.
+
+#### Running a list of prompts from the address
+
+The Web page can be opened with a list of prompts in its address: `/chat/new?autorun=<value>`, where the value is URL-safe base64 of the UTF-8 JSON `{"name": "…", "prompts": ["…", "…"]}` (at most 20 prompts). The page then starts by itself in a new conversation: it submits the first prompt and puts the others into the prompt queue, so each one runs after the one before it has ended and is routed right before its run. For this page it checks Auto and unchecks Alert without changing the remembered setting, and it removes `autorun` from the address so a reload does not start the list again. It needs a mode router; without one it shows a notice and sends nothing.
+
 ---
 
 ## Command-Line Modes (IM/TUI)

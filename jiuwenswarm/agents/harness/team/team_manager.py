@@ -4345,6 +4345,12 @@ def team_session_has_active_work(session_id: str) -> bool:
     )
 
 
+def is_team_round_active(session_id: str) -> bool:
+    """Whether a Team round is in flight: a prompt arriving now goes to its Leader."""
+    manager = _team_manager
+    return manager is not None and manager.is_round_active(session_id)
+
+
 def team_session_has_parked_request(session_id: str, request_ids) -> bool:
     """Whether every request only observes events or parks on a released round.
 

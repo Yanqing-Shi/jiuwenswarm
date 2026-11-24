@@ -17,6 +17,7 @@ await build({
     'src/services/obsUpload.ts',
     'src/features/sessionAssets/sessionAssets.ts',
     'src/features/sessionMode/modeSwitchGate.ts',
+    'src/features/sessionMode/autoRouteState.ts',
   ],
   outbase: 'src',
   outdir: 'node_modules/.cache/input-area-permission-merge',

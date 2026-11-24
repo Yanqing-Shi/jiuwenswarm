@@ -371,6 +371,73 @@ test('a pending mode switch blocks queue claims and steer claims until it settle
   }
 });
 
+test('a prompt being routed blocks queue claims and steer claims until it is on its way', () => {
+  const sessionId = 'mode-route-pending-claims';
+  const store = useChatStore.getState();
+  store.ensureRuntime(sessionId);
+  try {
+    store.addToTaskQueue(sessionId, 'first');
+    store.addToTaskQueue(sessionId, 'second');
+    const [first, second] = store.getRuntime(sessionId).taskQueue;
+    store.setModeRoutePending(sessionId, true);
+    assert.equal(store.getRuntime(sessionId).modeRoutePending, true);
+    assert.equal(store.claimQueuedTask(sessionId), undefined);
+    assert.equal(store.claimQueuedTask(sessionId, first.id), undefined);
+    assert.equal(store.claimTaskInput(sessionId, second.id), undefined);
+    assert.deepEqual(store.getRuntime(sessionId).taskQueue.map((task) => task.status), ['queued', 'queued']);
+
+    // A history reset while the router is deciding keeps the hold.
+    store.clearMessages(sessionId);
+    assert.equal(store.getRuntime(sessionId).modeRoutePending, true);
+
+    store.setModeRoutePending(sessionId, false);
+    store.addToTaskQueue(sessionId, 'third');
+    assert.equal(store.claimQueuedTask(sessionId)?.content, 'third');
+  } finally {
+    store.removeRuntime(sessionId);
+  }
+});
+
+test('a prompt being routed is recorded even before the Session runtime exists', () => {
+  const sessionId = 'mode-route-pending-without-runtime';
+  const store = useChatStore.getState();
+  try {
+    store.setModeRoutePending(sessionId, false);
+    assert.equal(store.getRuntime(sessionId), undefined, 'clearing must not create a runtime');
+    store.setModeRoutePending(sessionId, true);
+    assert.equal(store.getRuntime(sessionId)?.modeRoutePending, true);
+  } finally {
+    store.removeRuntime(sessionId);
+  }
+});
+
+test('a queued prompt is marked as routed only while it still waits', () => {
+  const sessionId = 'mode-route-marks';
+  const store = useChatStore.getState();
+  store.ensureRuntime(sessionId);
+  try {
+    store.addToTaskQueue(sessionId, 'first');
+    store.addToTaskQueue(sessionId, 'already asked', [], { routed: true });
+    const [first, second] = store.getRuntime(sessionId).taskQueue;
+    assert.equal(first.routed, undefined);
+    assert.equal(second.routed, true);
+
+    assert.equal(store.markTaskRouted(sessionId, first.id), true);
+    assert.equal(store.getRuntime(sessionId).taskQueue[0].routed, true);
+    assert.equal(store.markTaskRouted(sessionId, first.id), true, 'marking twice changes nothing');
+    assert.equal(store.markTaskRouted(sessionId, 'no-such-task'), false);
+    assert.equal(store.markTaskRouted('no-such-session', first.id), false);
+
+    // Sent, removed or steered away: the decision has nothing left to apply to.
+    assert.equal(store.claimQueuedTask(sessionId)?.id, first.id);
+    assert.equal(store.markTaskRouted(sessionId, first.id), false);
+    assert.equal(store.claimTaskInput(sessionId, second.id)?.id, second.id);
+    assert.equal(store.markTaskRouted(sessionId, second.id), false);
+  } finally {
+    store.removeRuntime(sessionId);
+  }
+});
+
 test('a pending mode switch is recorded even before the Session runtime exists', () => {
   const sessionId = 'mode-switch-pending-without-runtime';
   const store = useChatStore.getState();

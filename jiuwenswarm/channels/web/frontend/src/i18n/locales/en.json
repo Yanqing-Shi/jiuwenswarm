@@ -2583,6 +2583,23 @@
     },
     "configLockedHistory": "Session has messages — create a new session to change config",
     "modeSwitchDisabledProcessing": "This conversation is running. Start a new conversation to choose another mode",
+    "autoRoute": {
+      "auto": "Auto",
+      "autoHint": "Let the mode router choose Agent or Team before each run. The mode control is locked while this is on.",
+      "alert": "Alert",
+      "alertHint": "Ask before every mode switch the router decides. Turn off to switch without asking.",
+      "choosing": "Choosing mode…",
+      "confirmTitle": "Switch to {{target}}?",
+      "confirmMessage": "The mode router suggests running this prompt in {{target}} instead of {{current}}.",
+      "confirmReason": "Reason: {{reason}}",
+      "accept": "Switch to {{target}}",
+      "deny": "Stay in {{current}}",
+      "routerUnavailable": "The mode router did not answer. Prompts run in the current mode until it does.",
+      "workflowStarted": "Workflow \"{{name}}\" started, turns: {{turns}}. The mode router chooses the mode of each turn.",
+      "workflowNeedsRouter": "The workflow was not started: this server has no mode router.",
+      "workflowUnreadable": "The workflow in the address could not be read.",
+      "workflowNotStarted": "The first turn of the workflow did not start, so the other turns were not queued."
+    },
     "sessionModeSwitch": {
       "busy": "This conversation is still running. Stop it, then switch modes again.",
       "conflict": "Mode not switched: this conversation's mode was changed elsewhere.",

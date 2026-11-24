@@ -98,6 +98,7 @@ import { isPlanWireMode, resolvePlanWireMode, stripPlanSuffix } from './features
 import { commitSessionMode, type SessionModeCommitOutcome } from './features/sessionMode/commitSessionMode';
 import { canSwitchSessionModeInPlace } from './features/sessionMode/inPlaceModeSwitch';
 import { isPromptSubmitInFlight, queueActionAfterModeCommit } from './features/sessionMode/modeSwitchGate';
+import { setAutoRouteModeSwitcher, setModeRouterEnabled } from './features/sessionMode/autoRouteState';
 import { getWebTransport } from './utils/env';
 import { resolveRestoredPlanActive, enforceSwarmflowPlanPrecedence } from './features/planMode/planModeGate';
 import { queueOrAddGoalObjectiveMessage } from './features/goalPendingObjectiveBubble';
@@ -2411,6 +2412,7 @@ function AppContent({
       setTeamOrganizationUiEnabled(config.team_organization_ui_enabled);
       setComfyuiWorkflowEnabled(config.comfyui_workflow_enabled);
       setTeamScheduledDispatchEnabled(config.team_scheduled_dispatch_enabled);
+      setModeRouterEnabled(config.mode_router_enabled);
       const collaborationSnapshotApplied = applyMultiModelCollaborationSnapshot(
         config.multi_model_collaboration_enabled,
         collaborationRevision,
@@ -3657,6 +3659,12 @@ function AppContent({
     return false;
   }, [drainTaskQueueIfIdle, request, setMode, t]);
 
+  // With "auto" on, a switch the mode router decides is committed the same way.
+  useEffect(() => {
+    setAutoRouteModeSwitcher(switchSessionModeInPlace);
+    return () => setAutoRouteModeSwitcher(null);
+  }, [switchSessionModeInPlace]);
+
   // 切换模式。Resolves true only when the current Session itself switched (a draft,
   // or a saved Session whose mode.set committed); opening a fresh conversation or a
   // refused switch leaves this Session, and its draft, as they were.
@@ -4194,7 +4202,7 @@ function AppContent({
   useEffect(() => setMcpAppMessageHandler(async (targetSessionId, content) => {
     if (!targetSessionId || targetSessionId === NEW_CONVERSATION_ID) return false;
     const runtime = useChatStore.getState().getRuntime(targetSessionId);
-    if (runtime?.isProcessing || runtime?.queuePaused || runtime?.modeSwitchPending) return false;
+    if (runtime?.isProcessing || runtime?.queuePaused || runtime?.modeSwitchPending || runtime?.modeRoutePending) return false;
     return sendMessage(content, targetSessionId);
   }), [sendMessage]);
 

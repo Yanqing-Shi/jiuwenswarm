@@ -2582,6 +2582,23 @@
       "noBreakdown": "后端未返回分类明细"
     },
     "modeSwitchDisabledProcessing": "当前对话运行中，请新建对话后选择模式",
+    "autoRoute": {
+      "auto": "自动",
+      "autoHint": "每次运行开始前由模式路由选择单Agent模式或集群模式。开启后模式控件锁定。",
+      "alert": "提醒",
+      "alertHint": "路由决定切换模式时先询问。关闭后直接切换，不再询问。",
+      "choosing": "正在选择模式…",
+      "confirmTitle": "切换到{{target}}？",
+      "confirmMessage": "模式路由建议用{{target}}执行这条提示词，而不是{{current}}。",
+      "confirmReason": "原因：{{reason}}",
+      "accept": "切换到{{target}}",
+      "deny": "保持{{current}}",
+      "routerUnavailable": "模式路由没有应答。恢复前提示词按当前模式执行。",
+      "workflowStarted": "工作流“{{name}}”已开始，共 {{turns}} 轮。每一轮的模式由模式路由选择。",
+      "workflowNeedsRouter": "工作流未开始：服务端没有配置模式路由。",
+      "workflowUnreadable": "无法读取地址中的工作流。",
+      "workflowNotStarted": "工作流的第一轮没有开始，其余各轮未加入队列。"
+    },
     "sessionModeSwitch": {
       "busy": "当前对话仍在执行，请停止后再切换模式。",
       "conflict": "未切换：该对话的模式已在其他地方更改。",

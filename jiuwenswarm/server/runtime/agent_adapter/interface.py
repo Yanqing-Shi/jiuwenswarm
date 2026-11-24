@@ -769,6 +769,21 @@ def _with_heartbeat_history_metadata(
     return result
 
 
+def _mark_team_round_input(extra: dict[str, Any] | None, session_id: str) -> dict[str, Any] | None:
+    """Mark a prompt recorded while a Team round is in flight.
+
+    Such a prompt goes to the Leader of that round and starts no run of its
+    own. The history shows no other difference from a prompt sent to an idle
+    Team, and the mode router's task container keeps it in the running task.
+    """
+    from jiuwenswarm.agents.harness.team.team_manager import is_team_round_active
+    from jiuwenswarm.server.runtime.session.mode_router_tasks import TEAM_ROUND_INPUT_FIELD
+
+    if not is_team_round_active(session_id):
+        return extra
+    return {**(extra or {}), TEAM_ROUND_INPUT_FIELD: True}
+
+
 def _history_user_extra(params: Any) -> dict[str, Any] | None:
     """Extract media/files/skills from ``params`` for the history extra.
 
@@ -3944,7 +3959,7 @@ class JiuWenSwarm:
                 role="user",
                 content=_history_user_content(request.params, query),
                 timestamp=time.time(),
-                extra=_history_user_extra(request.params),
+                extra=_mark_team_round_input(_history_user_extra(request.params), session_id),
                 channel_metadata=request.metadata,
                 mode=request.params.get("mode", "unknown"),
             )
@@ -4715,7 +4730,7 @@ class JiuWenSwarm:
                 role="user",
                 content=_history_user_content(params_for_history, query),
                 timestamp=time.time(),
-                extra=_history_user_extra(params_for_history),
+                extra=_mark_team_round_input(_history_user_extra(params_for_history), session_id),
                 channel_metadata=history_channel_metadata,
                 mode=params_for_history.get("mode", "unknown"),
             )

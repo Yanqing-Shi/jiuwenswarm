@@ -3463,6 +3463,142 @@ class AgentRuntime:
             "project_id": metadata.get("project_id"),
         }
 
+    @staticmethod
+    def session_mode_route_context(
+        *,
+        session_id: str,
+        channel_id: str,
+        user_id: str,
+        current_mode: str | None = None,
+    ) -> dict[str, Any]:
+        """Check that a prompt may be routed and name the mode it would leave.
+
+        A saved Session answers with its stored mode. A conversation that is
+        not saved yet has no ``session_id`` and names its mode itself.
+        """
+        from jiuwenswarm.common.mode_router_config import mode_router_enabled
+        from jiuwenswarm.server.runtime.session.session_metadata import (
+            get_session_metadata,
+            mode_switch_session_visible_to,
+            normalize_switchable_session_mode,
+            session_mode_switch_blocker,
+        )
+
+        if not mode_router_enabled():
+            raise SessionModeSwitchError("mode router is not configured", code="ROUTER_DISABLED")
+        if not session_id:
+            if (
+                not isinstance(current_mode, str)
+                or normalize_switchable_session_mode(current_mode) != current_mode
+            ):
+                raise SessionModeSwitchError(
+                    "current_mode is required for a new conversation", code="BAD_REQUEST",
+                )
+            return {
+                "session_id": "",
+                "current_mode": current_mode,
+                "work_mode": current_mode.split(".")[1],
+            }
+        metadata = get_session_metadata(
+            session_id, cache_bust=True, enable_writeback=False,
+        )
+        if not metadata or not mode_switch_session_visible_to(
+            metadata, channel_id=channel_id, user_id=user_id,
+        ):
+            raise SessionModeSwitchError("session not found", code="NOT_FOUND")
+        blocker = session_mode_switch_blocker(metadata)
+        if blocker is not None:
+            raise SessionModeSwitchError(blocker, code="BAD_REQUEST")
+        stored_mode = normalize_switchable_session_mode(metadata.get("mode"))
+        if stored_mode is None:
+            raise SessionModeSwitchError(
+                "session mode is unknown; choose an explicit mode",
+                code="MODE_UNKNOWN",
+            )
+        work_mode = metadata.get("work_mode")
+        if not isinstance(work_mode, str) or work_mode.strip().lower() not in {"code", "work"}:
+            work_mode = stored_mode.split(".")[1]
+        return {
+            "session_id": session_id,
+            "current_mode": stored_mode,
+            "work_mode": work_mode.strip().lower(),
+        }
+
+    @staticmethod
+    async def route_session_mode(
+        context: dict[str, Any],
+        *,
+        query: str,
+        request_id: str,
+    ) -> dict[str, Any]:
+        """Ask the mode router where a prompt should run; nothing is committed.
+
+        ``context`` comes from ``session_mode_route_context``. The caller
+        commits a different mode through ``switch_session_mode``.
+        """
+        from jiuwenswarm.common.mode_router_config import mode_router_settings
+        from jiuwenswarm.server.runtime.session.mode_router import (
+            ModeRouterError,
+            cut_text,
+            request_decision,
+            route_of,
+            task_history,
+        )
+        from jiuwenswarm.server.runtime.session.session_metadata import switch_target_for_route
+
+        settings = mode_router_settings()
+        session_id = context["session_id"]
+        current_mode = context["current_mode"]
+        history: list[dict[str, Any]] = []
+        if session_id:
+            try:
+                history = await asyncio.to_thread(
+                    task_history,
+                    session_id,
+                    items=settings.history_items,
+                    chars=settings.history_chars,
+                )
+            except Exception:
+                # History is a hint for the router; the prompt alone still routes.
+                logger.warning(
+                    "Mode router history unavailable: session=%s", session_id, exc_info=True,
+                )
+        try:
+            decision = await request_decision(
+                settings,
+                {
+                    "request_id": request_id,
+                    "session_id": session_id or None,
+                    "query": cut_text(query, settings.query_chars),
+                    "current_mode": route_of(current_mode),
+                    "work_mode": context["work_mode"],
+                    "history": history,
+                },
+            )
+        except ModeRouterError as exc:
+            logger.info(
+                "Mode router gave no decision: session=%s code=%s error=%s",
+                session_id, exc.code, exc,
+            )
+            raise SessionModeSwitchError(str(exc), code=exc.code) from exc
+        target_mode = switch_target_for_route(current_mode, decision["route"])
+        if target_mode is None:
+            raise SessionModeSwitchError(
+                f"no switchable mode for route {decision['route']!r}", code="ROUTER_BAD_ANSWER",
+            )
+        logger.info(
+            "Mode router decision: session=%s current=%s route=%s confidence=%s",
+            session_id, current_mode, decision["route"], decision["confidence"],
+        )
+        return {
+            "route": decision["route"],
+            "mode": target_mode,
+            "current_mode": current_mode,
+            "switch_needed": target_mode != current_mode,
+            "confidence": decision["confidence"],
+            "reason": decision["reason"],
+        }
+
     def _session_mode_switch_busy_reason(self, session_id: str) -> str | None:
         """Name the signal that keeps a Session busy for mode.set, or None when idle."""
         pending = self._pending_chat_requests.get(session_id)

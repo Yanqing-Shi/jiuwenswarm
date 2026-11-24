@@ -235,6 +235,11 @@ import { RecordingWaveform } from '../../features/taskAsr/RecordingWaveform';
 import { useTaskAsrEnabled } from '../../features/taskAsr/featureFlag';
 import { allowsInPlaceModeSwitch } from '../../features/sessionMode/inPlaceModeSwitch';
 import { isPromptSubmitInFlight, promptWaitsForModeSwitch } from '../../features/sessionMode/modeSwitchGate';
+import {
+  setAutoRouteSettings,
+  useAutoRouteAvailable,
+  useAutoRouteSettings,
+} from '../../features/sessionMode/autoRouteState';
 import { getWebTransport } from '../../utils/env';
 import { ApplicationPluginTaskInputActions } from '../../applicationPlugins/ApplicationPluginOutlet';
 
@@ -1183,6 +1188,9 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   const ownerOrganizationIsProcessing = conversationId === activeSessionId && organizationIsProcessing;
   const queuePaused = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.queuePaused ?? false);
   const modeSwitchPending = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.modeSwitchPending ?? false);
+  const modeRoutePending = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.modeRoutePending ?? false);
+  const autoRouteSettings = useAutoRouteSettings();
+  const autoRouteAvailable = useAutoRouteAvailable();
   const isLoadingHistory = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.isLoadingHistory ?? false);
   const inputValue = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.inputValue ?? '');
   const evolutionStatus = useChatStore((s) => s.runtimes[activeSessionId ?? '']?.evolutionStatus ?? null);
@@ -1237,9 +1245,17 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
     enterprise,
     transport: getWebTransport(),
   });
+  // "auto" is offered where the mode router chooses: between Agent and Team.
+  const autoRouteOffered = autoRouteAvailable && (isAgentMode || isTeamMode);
   // Upstream no longer locks enterprise outright: a conversation without history picks its mode
   // locally. In-place switching stays personal-only, so enterprise locks as soon as history exists.
-  const modeLocked = isProcessing || modeSwitchPending || (hasHistory && !inPlaceModeSwitchAllowed);
+  // With "auto" checked the control only shows the mode in use.
+  const modeLocked =
+    isProcessing ||
+    modeSwitchPending ||
+    modeRoutePending ||
+    (autoRouteOffered && autoRouteSettings.auto) ||
+    (hasHistory && !inPlaceModeSwitchAllowed);
   const [teamQuotaHint, setTeamQuotaHint] = useState('');
   const [teamCreateBlocked, setTeamCreateBlocked] = useState(false);
 
@@ -3020,9 +3036,14 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
 
     const sid = useChatStore.getState().activeSessionId;
     let sentViaTaskQueue = false;
-    if (sid && promptWaitsForModeSwitch(sid, useChatStore.getState().getRuntime(sid)?.modeSwitchPending)) {
-      // The user switched mode before this prompt: it waits in the queue and is
-      // sent in the committed mode. A goal cannot wait there, so its draft stays.
+    const chatRuntime = sid ? useChatStore.getState().getRuntime(sid) : undefined;
+    // The first prompt of a new conversation is still being routed; there is no
+    // queue to wait in before the conversation exists, so the draft stays.
+    if (sid === NEW_CONVERSATION_ID && chatRuntime?.modeRoutePending) return;
+    if (sid && promptWaitsForModeSwitch(sid, chatRuntime?.modeSwitchPending || chatRuntime?.modeRoutePending)) {
+      // The user switched mode before this prompt, or the mode router is still
+      // deciding for an earlier one: it waits in the queue and is sent once
+      // that settles. A goal cannot wait there, so its draft stays.
       if (goalArmed && trimmedBase) return;
       useChatStore.getState().addToTaskQueue(sid, submitContent, readyMediaItems);
       sentViaTaskQueue = true;
@@ -5396,7 +5417,9 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                       </span>
                       <span className="chat-mode-select__label">{t(currentMode.i18nKey)}</span>
                     </span>
-                    {!modeLocked && (
+                    {/* Next to the "auto" checkbox a locked control keeps the icon's
+                        space, so the checkbox does not move when the lock changes. */}
+                    {(!modeLocked || autoRouteOffered) && (
                       <svg
                         className="chat-mode-select__chevron"
                         viewBox="0 0 20 20"
@@ -5404,6 +5427,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                         stroke="currentColor"
                         strokeWidth={1.8}
                         aria-hidden="true"
+                        style={modeLocked ? { visibility: 'hidden' } : undefined}
                       >
                         <path strokeLinecap="round" strokeLinejoin="round" d="M6 8l4 4 4-4" />
                       </svg>
@@ -5507,6 +5531,35 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                     {teamQuotaHint}
                   </span>
                 ) : null}
+                {autoRouteOffered && (
+                  <div className="chat-auto-route" data-testid="chat-panel-auto-route">
+                    <label className="chat-auto-route__option" title={t('chat.autoRoute.autoHint')}>
+                      <input
+                        type="checkbox"
+                        data-testid="chat-panel-auto-route-auto-checkbox"
+                        checked={autoRouteSettings.auto}
+                        onChange={(event) => setAutoRouteSettings({ auto: event.target.checked })}
+                      />
+                      <span data-testid="chat-panel-auto-route-auto-label">{t('chat.autoRoute.auto')}</span>
+                    </label>
+                    {autoRouteSettings.auto && (
+                      <label className="chat-auto-route__option" title={t('chat.autoRoute.alertHint')}>
+                        <input
+                          type="checkbox"
+                          data-testid="chat-panel-auto-route-alert-checkbox"
+                          checked={autoRouteSettings.alert}
+                          onChange={(event) => setAutoRouteSettings({ alert: event.target.checked })}
+                        />
+                        <span data-testid="chat-panel-auto-route-alert-label">{t('chat.autoRoute.alert')}</span>
+                      </label>
+                    )}
+                    {modeRoutePending && (
+                      <span className="chat-auto-route__status" data-testid="chat-panel-auto-route-status">
+                        {t('chat.autoRoute.choosing')}
+                      </span>
+                    )}
+                  </div>
+                )}
                 {!enterprise && !isTeamMode && (
                   <PermissionSelector
                     mode={mode}

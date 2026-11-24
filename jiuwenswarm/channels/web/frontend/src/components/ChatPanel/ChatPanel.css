@@ -1620,6 +1620,29 @@
   min-width: 0;
 }
 
+.chat-auto-route {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.chat-auto-route__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chat-auto-route__status {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
 .chat-model-selector {
   display: inline-flex;
   flex-direction: column;

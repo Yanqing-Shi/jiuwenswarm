@@ -8,6 +8,7 @@ import { isConversationModelGroupBlocked } from '../multi-session/state/conversa
 import { parseModelSelection } from '../features/settings/modules/models/modelGroupAdapters';
 import { mayProcessingTrueFrameRelight } from '../features/interruptSettleGuard';
 import { promptWaitsForModeSwitch, queueDrainsInMode } from '../features/sessionMode/modeSwitchGate';
+import { routePromptBeforeRun, routesPromptBeforeRun } from '../features/sessionMode/autoRouteState';
 import { isMultiModelCollaborationEnabled } from '../features/multiModelCollaboration/featureConfig';
 import { foldEnterpriseStreamText } from '../features/enterpriseStreamText';
 import { isRestoredOutputReplay, readOutputOrder } from '../features/sessionOutput';
@@ -2104,12 +2105,13 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
    * "恢复队列"）。isProcessing 为真时直接跳过，交给已有的 processing_status 处理器
    * 在真正空闲下来时接管，不会重复发送。
    */
+  const routeQueuedPromptRef = useRef<(sessionId: string, taskId: string, query: string) => void>();
   const drainTaskQueueIfIdle = useCallback((sessionId: string) => {
     const currentMode = useSessionStore.getState().getRuntime(sessionId)?.mode;
     if (!queueDrainsInMode(currentMode)) return;
     const runtime = useChatStore.getState().getRuntime(sessionId);
-    // A pending mode switch releases the queue itself once it settles.
-    if (runtime?.isProcessing || runtime?.queuePaused || runtime?.modeSwitchPending) return;
+    // A pending mode switch, or a prompt being routed, releases the queue itself once it settles.
+    if (runtime?.isProcessing || runtime?.queuePaused || runtime?.modeSwitchPending || runtime?.modeRoutePending) return;
     if (!sendMessageRef.current) return;
     const sessionState = useSessionStore.getState();
     const sessionMetadata = sessionState.currentSession?.session_id === sessionId
@@ -2121,11 +2123,54 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
       selectedModelSelection: sessionState.getRuntime(sessionId)?.selectedModelSelection,
       collaborationEnabled: isMultiModelCollaborationEnabled(),
     })) return;
+    // With "auto" on, the prompt that starts the next run goes to the mode
+    // router first. The run before it has ended, so the router reads its result.
+    const head = runtime?.taskQueue.find((task) => task.status === 'queued');
+    if (
+      head &&
+      !head.routed &&
+      routesPromptBeforeRun(sessionId) &&
+      // The same conditions under which claimQueuedTask would hand nothing out.
+      !runtime?.isPaused &&
+      !runtime?.pendingQuestions.length &&
+      !runtime?.taskQueue.some((task) => task.status === 'sending')
+    ) {
+      routeQueuedPromptRef.current?.(sessionId, head.id, head.content);
+      return;
+    }
     const nextTask = useChatStore.getState().claimQueuedTask(sessionId);
     if (nextTask) {
       sendMessageRef.current(nextTask.content, sessionId, nextTask.mediaItems ?? []);
     }
   }, []);
+
+  // Route the queued prompt that is next to run, then let the queue send it.
+  routeQueuedPromptRef.current = (sessionId, taskId, query) => {
+    const stillQueued = () =>
+      useChatStore
+        .getState()
+        .getRuntime(sessionId)
+        ?.taskQueue.some((task) => task.id === taskId && task.status === 'queued') ?? false;
+    // A run that starts meanwhile makes the decision stale: no pop-up, no switch.
+    const stillWanted = () => stillQueued() && !useChatStore.getState().getRuntime(sessionId)?.isProcessing;
+    useChatStore.getState().setModeRoutePending(sessionId, true);
+    void routePromptBeforeRun({ sessionId, query, stillWanted })
+      .catch((error): 'run' => {
+        console.warn('Mode routing failed; the prompt keeps its mode:', error);
+        return 'run';
+      })
+      .then((verdict) => {
+        const chat = useChatStore.getState();
+        // The result of a run that started meanwhile is not in what the router
+        // read: the prompt stays unrouted and is asked about again once that run ends.
+        const routed =
+          verdict === 'run' && !chat.getRuntime(sessionId)?.isProcessing && chat.markTaskRouted(sessionId, taskId);
+        // A needed switch did not commit: the prompt is not sent in the old mode.
+        if (verdict === 'hold' && stillQueued()) chat.setQueuePaused(sessionId, true);
+        chat.setModeRoutePending(sessionId, false);
+        if (routed || !stillQueued()) drainTaskQueueIfIdle(sessionId);
+      });
+  };
 
   // 发送聊天消息
   const sendMessage = useCallback(

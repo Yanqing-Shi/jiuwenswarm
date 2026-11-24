@@ -1935,6 +1935,10 @@ test('a mode switch is refused from the moment a prompt is submitted', async () 
   const handleSendMessage = loadCallback('components/ChatPanel/index.tsx', 'handleSendMessage', {
     takeNextInputSubmission: () => ({ provenance: { input_origin: 'manual_free_text' }, settle() {} }),
     activeSessionId: sessionId,
+    useChatStore,
+    // "auto" is off: the prompt is not sent to the mode router.
+    routesPromptBeforeRun: () => false,
+    routePromptBeforeRun: () => assert.fail('"auto" is off'),
     beginPromptSubmit,
     endPromptSubmit,
     // A plugin flush keeps the prompt between "send pressed" and the actual send.
@@ -1968,6 +1972,309 @@ test('a mode switch is refused from the moment a prompt is submitted', async () 
     chat.setProcessing(sessionId, false);
     handleSwitchMode('team');
     assert.deepEqual(switches, [[sessionId, 'agent', 'team']]);
+  } finally {
+    chat.removeRuntime(sessionId);
+  }
+});
+
+// ---- "auto": the mode router chooses Agent or Team before each run ----
+
+const autoRoute = await import('../node_modules/.cache/input-area-permission-merge/features/sessionMode/autoRouteState.js');
+
+/** Run with a mode router configured on the server; the checkboxes start as a new user finds them. */
+async function withModeRouter(run) {
+  await act(async () => {
+    autoRoute.setAutoRouteSettings({ auto: false, alert: true });
+    autoRoute.setModeRouterEnabled(true);
+  });
+  try {
+    await run();
+  } finally {
+    await act(async () => {
+      autoRoute.setAutoRouteSettings({ auto: false, alert: true });
+      autoRoute.setModeRouterEnabled(false);
+    });
+  }
+}
+
+const modeMenu = () => document.querySelector('[data-testid="chat-panel-mode-select-menu"]');
+const maybe = (testId) => document.querySelector(`[data-testid="${testId}"]`);
+
+test('the "auto" checkbox is offered only when the server has a mode router', async () => {
+  await mount({}, async ({ render }) => {
+    assert.equal(maybe('chat-panel-auto-route'), null);
+    await withModeRouter(async () => {
+      await render();
+      assert.equal(byId('chat-panel-auto-route-auto-checkbox').checked, false);
+      assert.equal(byId('chat-panel-auto-route-auto-label').textContent, 'Auto');
+      assert.equal(maybe('chat-panel-auto-route-alert-checkbox'), null, '"alert" appears only with "auto"');
+      // Unchecked is the base version: the user switches by hand.
+      await click(byId('chat-panel-mode-select-trigger'));
+      assert.ok(modeMenu());
+      await click(byId('chat-panel-mode-select-trigger'));
+    });
+    await render();
+    assert.equal(maybe('chat-panel-auto-route'), null);
+  });
+});
+
+for (const mode of ['agent', 'team']) {
+  test(`${mode}: checking "auto" locks the mode control on the mode in use and offers "alert", checked`, async () => {
+    await mount({ mode }, async ({ render, switched }) => {
+      await withModeRouter(async () => {
+        await render();
+        await click(byId('chat-panel-auto-route-auto-checkbox'));
+        assert.deepEqual(autoRoute.getAutoRouteSettings(), { auto: true, alert: true });
+        assert.equal(byId('chat-panel-auto-route-alert-checkbox').checked, true);
+        assert.equal(byId('chat-panel-auto-route-alert-label').textContent, 'Alert');
+
+        const trigger = byId('chat-panel-mode-select-trigger');
+        assert.equal(trigger.dataset.variant, mode, 'the control shows the mode in use');
+        // The dropdown icon is hidden but keeps its space, so the checkbox stays where it was.
+        const chevron = trigger.querySelector('.chat-mode-select__chevron');
+        assert.ok(chevron, 'the icon still takes up its place');
+        assert.equal(chevron.style.visibility, 'hidden');
+        await click(trigger);
+        assert.equal(modeMenu(), null);
+        assert.deepEqual(switched, []);
+
+        await click(byId('chat-panel-auto-route-alert-checkbox'));
+        assert.deepEqual(autoRoute.getAutoRouteSettings(), { auto: true, alert: false });
+        assert.deepEqual(
+          JSON.parse(localStorage.getItem('jiuwenswarm.sessionMode.autoRoute')),
+          { auto: true, alert: false },
+          'one setting for every conversation, remembered in the browser',
+        );
+
+        // Unchecking "auto" gives the control back.
+        await click(byId('chat-panel-auto-route-auto-checkbox'));
+        assert.equal(maybe('chat-panel-auto-route-alert-checkbox'), null);
+        assert.equal(
+          byId('chat-panel-mode-select-trigger').querySelector('.chat-mode-select__chevron').style.visibility,
+          '',
+          'the icon shows again',
+        );
+        await click(byId('chat-panel-mode-select-trigger'));
+        assert.ok(modeMenu());
+        await click(byId('chat-panel-mode-select-option', mode === 'agent' ? 'team' : 'agent'));
+        assert.deepEqual(switched, [mode === 'agent' ? 'team' : 'agent']);
+      });
+    });
+  });
+}
+
+for (const mode of ['agent', 'team']) {
+  test(`${mode}: a prompt submitted while the mode router decides for an earlier one waits in the queue`, async () => {
+    await mount({ mode }, async ({ props, render, sessionId }) => {
+      const sent = [];
+      props.onSubmit = (...args) => sent.push(args);
+      props.onInterrupt = () => assert.fail('a held prompt must not interrupt');
+      await withModeRouter(async () => {
+        await act(async () => {
+          autoRoute.setAutoRouteSettings({ auto: true });
+          useChatStore.getState().setModeRoutePending(sessionId, true);
+        });
+        try {
+          await render();
+          assert.equal(byId('chat-panel-auto-route-status').textContent, 'Choosing mode…');
+          await typeInput('sent while the router decides');
+          await click(byId('chat-panel-input-send'));
+          assert.deepEqual(sent, [], 'nothing may overtake the prompt being routed');
+          const queue = useChatStore.getState().getRuntime(sessionId).taskQueue;
+          assert.deepEqual(queue.map((task) => [task.content, task.status]), [['sent while the router decides', 'queued']]);
+        } finally {
+          await act(async () => useChatStore.getState().setModeRoutePending(sessionId, false));
+        }
+        await render();
+        assert.equal(maybe('chat-panel-auto-route-status'), null);
+      });
+    });
+  });
+}
+
+test('an idle prompt with "auto" on is still handed to the send path, which routes it', async () => {
+  await mount({ mode: 'team' }, async ({ props, render, sessionId }) => {
+    const sent = [];
+    props.onSubmit = (text) => sent.push(text);
+    await withModeRouter(async () => {
+      await act(async () => autoRoute.setAutoRouteSettings({ auto: true }));
+      await render();
+      await typeInput('ordinary input');
+      await click(byId('chat-panel-input-send'));
+      assert.deepEqual(sent, ['ordinary input']);
+      assert.deepEqual(useChatStore.getState().getRuntime(sessionId).taskQueue, []);
+    });
+  });
+});
+
+/** ChatPanel's send handler with "auto" on, around a router the test answers. */
+function autoRoutedSend(sessionId, overrides = {}) {
+  const chat = useChatStore.getState();
+  const routed = [];
+  const sent = [];
+  const settled = [];
+  const drained = [];
+  let answerRouter;
+  const handleSendMessage = loadCallback('components/ChatPanel/index.tsx', 'handleSendMessage', {
+    takeNextInputSubmission: () => ({
+      provenance: { input_origin: 'manual_free_text' },
+      settle: (ok) => settled.push(ok),
+    }),
+    activeSessionId: sessionId,
+    useChatStore,
+    useSessionStore: { getState: () => ({ getRuntime: () => ({ mode: 'agent' }) }) },
+    NEW_CONVERSATION_ID: 'new',
+    resolveOutgoingMode: (id, mode) => `${mode}.work.normal`,
+    routesPromptBeforeRun: () => true,
+    routePromptBeforeRun: (input) => {
+      routed.push(input);
+      return new Promise((resolve) => { answerRouter = resolve; });
+    },
+    onDrainTaskQueueIfIdle: (id) => drained.push(id),
+    beginPromptSubmit,
+    endPromptSubmit,
+    flushApplicationConversationHistory: async () => {},
+    toast: { open: () => assert.fail('the flush succeeds') },
+    t: (key) => key,
+    setIsSending() {},
+    // The real send path marks the Session busy before its first await.
+    onSendMessage: (content, mediaItems, options) => {
+      sent.push({ content, options });
+      chat.setProcessing(sessionId, true);
+      return Promise.resolve(sessionId);
+    },
+    visibleTopicSlateRef: { current: null },
+    acceptingDynamicRef: { current: false },
+    ensureTopicStarterExposureAcknowledged: async () => {},
+    sendTopicStarterEvent: async () => {},
+    buildDirectInputEvent: () => ({}),
+    setTopicStarterErrorKey() {},
+    ...overrides,
+  });
+  return { handleSendMessage, routed, sent, settled, drained, answerRouter: (verdict) => answerRouter(verdict) };
+}
+
+test('with "auto" on, an idle prompt is routed before it is sent and later prompts wait behind it', async () => {
+  const sessionId = 'auto-route-direct';
+  const chat = useChatStore.getState();
+  chat.ensureRuntime(sessionId);
+  chat.setActiveSessionId(sessionId);
+  try {
+    const send = autoRoutedSend(sessionId);
+    const first = send.handleSendMessage('build a website');
+    assert.deepEqual(send.routed.map((input) => [input.sessionId, input.query, input.draftMode]), [
+      [sessionId, 'build a website', undefined],
+    ]);
+    assert.deepEqual(send.sent, [], 'nothing is sent while the router decides');
+    assert.equal(chat.getRuntime(sessionId).modeRoutePending, true);
+    assert.equal(isPromptSubmitInFlight(sessionId), true, 'a manual switch cannot overtake it either');
+
+    // A second prompt in the meantime waits in the queue and is not routed yet.
+    await send.handleSendMessage('and add a blog');
+    assert.equal(send.routed.length, 1);
+    assert.deepEqual(chat.getRuntime(sessionId).taskQueue.map((task) => [task.content, task.routed]), [
+      ['and add a blog', undefined],
+    ]);
+
+    send.answerRouter('run');
+    await first;
+    assert.deepEqual(send.sent.map((item) => item.content), ['build a website']);
+    assert.equal(chat.getRuntime(sessionId).modeRoutePending, false);
+    assert.equal(chat.getRuntime(sessionId).isProcessing, true, 'the queue now waits for this run');
+    assert.equal(isPromptSubmitInFlight(sessionId), false);
+    assert.equal(chat.getRuntime(sessionId).taskQueue.length, 1);
+  } finally {
+    chat.removeRuntime(sessionId);
+  }
+});
+
+test('with "auto" on, a switch that did not commit keeps the prompt queued and paused', async () => {
+  const sessionId = 'auto-route-hold';
+  const chat = useChatStore.getState();
+  chat.ensureRuntime(sessionId);
+  chat.setActiveSessionId(sessionId);
+  try {
+    const send = autoRoutedSend(sessionId);
+    const submitted = send.handleSendMessage('build a website');
+    send.answerRouter('hold');
+    await submitted;
+    assert.deepEqual(send.sent, [], 'not sent in the old mode');
+    assert.deepEqual(send.settled, [false]);
+    assert.deepEqual(send.drained, []);
+    const runtime = chat.getRuntime(sessionId);
+    assert.deepEqual(runtime.taskQueue.map((task) => [task.content, task.routed]), [['build a website', undefined]]);
+    assert.equal(runtime.queuePaused, true);
+    assert.equal(runtime.modeRoutePending, false);
+    assert.equal(isPromptSubmitInFlight(sessionId), false);
+  } finally {
+    chat.removeRuntime(sessionId);
+  }
+});
+
+test('with "auto" on, input to a running turn and steered queue items are not routed', async () => {
+  const sessionId = 'auto-route-running';
+  const chat = useChatStore.getState();
+  chat.ensureRuntime(sessionId);
+  chat.setActiveSessionId(sessionId);
+  try {
+    const send = autoRoutedSend(sessionId);
+    // A Team run is going: the message goes to the Leader as it is.
+    chat.setProcessing(sessionId, true);
+    await send.handleSendMessage('also check the footer');
+    assert.deepEqual(send.sent.map((item) => item.content), ['also check the footer']);
+    // "Send now" on a queued prompt pushes it into the current turn.
+    chat.setProcessing(sessionId, false);
+    await send.handleSendMessage('queued prompt', [], { queuedTaskId: 'task-1' });
+    assert.deepEqual(send.sent.map((item) => item.content), ['also check the footer', 'queued prompt']);
+    assert.deepEqual(send.routed, []);
+    assert.equal(chat.getRuntime(sessionId).modeRoutePending, false);
+  } finally {
+    chat.removeRuntime(sessionId);
+  }
+});
+
+test('with "auto" on, a prompt routed for a conversation the user has left runs from its queue', async () => {
+  const sessionId = 'auto-route-left';
+  const chat = useChatStore.getState();
+  chat.ensureRuntime(sessionId);
+  chat.setActiveSessionId(sessionId);
+  try {
+    const send = autoRoutedSend(sessionId);
+    const submitted = send.handleSendMessage('build a website');
+    chat.setActiveSessionId('another-conversation');
+    send.answerRouter('run');
+    await submitted;
+    assert.deepEqual(send.sent, [], 'the direct send would reach the conversation now on screen');
+    assert.deepEqual(chat.getRuntime(sessionId).taskQueue.map((task) => [task.content, task.routed]), [
+      ['build a website', true],
+    ]);
+    assert.equal(chat.getRuntime(sessionId).queuePaused, false);
+    assert.deepEqual(send.drained, [sessionId]);
+    assert.equal(chat.getRuntime(sessionId).modeRoutePending, false);
+  } finally {
+    chat.removeRuntime(sessionId);
+    chat.removeRuntime('another-conversation');
+  }
+});
+
+test('with "auto" on, the first prompt of a new conversation is routed by the mode it would be created with', async () => {
+  const sessionId = 'new';
+  const chat = useChatStore.getState();
+  chat.ensureRuntime(sessionId);
+  chat.setActiveSessionId(sessionId);
+  try {
+    const send = autoRoutedSend(sessionId);
+    const submitted = send.handleSendMessage('build a website');
+    assert.deepEqual(send.routed.map((input) => [input.sessionId, input.query, input.draftMode]), [
+      ['new', 'build a website', 'agent.work.normal'],
+    ]);
+    // There is no queue before the conversation exists: a second submit is ignored.
+    await send.handleSendMessage('second');
+    assert.deepEqual(chat.getRuntime(sessionId).taskQueue, []);
+    send.answerRouter('run');
+    await submitted;
+    assert.deepEqual(send.sent.map((item) => item.content), ['build a website']);
+    assert.equal(chat.getRuntime(sessionId).modeRoutePending, false);
   } finally {
     chat.removeRuntime(sessionId);
   }

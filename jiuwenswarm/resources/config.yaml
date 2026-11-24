@@ -1984,6 +1984,22 @@ modes:
         # 控制记忆内容如何注入到每个成员的 system prompt 中：
         #   "proactive" — 每轮对话开始时主动注入最新记忆摘要
         member_memory_prompt_mode: "proactive"
+# Optional local mode router: before a run starts it answers whether the prompt
+# belongs in Agent or Team mode. Off while no address is set. The environment
+# variable MODE_ROUTER_URL overrides ``url``.
+mode_router:
+  url: ""
+  # Seconds to wait for an answer; without one the prompt keeps its mode.
+  timeout_seconds: 3
+  # The router reads what was typed before and the final answer of each run, in
+  # recorded order, and then the new prompt.
+  # How many earlier items (prompts and answers) are kept. When one more comes
+  # in, the earliest goes out. 0 means no limit.
+  history_items: 20
+  # Texts are sent in full. Optional caps: longest text kept per earlier prompt
+  # or answer, and of the new prompt; 0 means no limit.
+  history_chars: 0
+  query_chars: 0
 recommendation:
   # null = 跟随程序默认；用户切换后保存 true/false
   topic_enabled: null

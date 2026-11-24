@@ -150,6 +150,8 @@ interface TaskItem {
   error?: string;
   /** Persisted attachments (images/documents, incl. PDF); dispatched with the message when the queued task is sent */
   mediaItems?: MediaItem[];
+  /** With "auto" on: the mode router has already been asked about this prompt, so it is sent as is. */
+  routed?: boolean;
 }
 
 export interface QueuedSessionMessage {
@@ -233,6 +235,13 @@ export interface ChatRuntime {
    * Only the commit that set it clears it; runtime resets keep it.
    */
   modeSwitchPending: boolean;
+  /**
+   * With "auto" on, the mode router (and, with "alert", the user) is deciding
+   * the mode for the prompt that starts the next run. Other prompts wait in
+   * `taskQueue` and nothing leaves the queue until that prompt is on its way.
+   * Only the routing step that set it clears it; runtime resets keep it.
+   */
+  modeRoutePending: boolean;
   isNewSession: boolean;
   currentStreamContent: string;
   currentStreamId: string | null;
@@ -315,6 +324,7 @@ function createEmptyRuntime(): ChatRuntime {
     interruptSettledEpoch: null,
     switchingMode: false,
     modeSwitchPending: false,
+    modeRoutePending: false,
     isNewSession: false,
     currentStreamContent: '',
     currentStreamId: null,
@@ -464,6 +474,7 @@ interface ChatState {
   settleLifecycleStoppedSession: (sessionId: string) => void;
   setSwitchingMode: (sessionId: string, switching: boolean) => void;
   setModeSwitchPending: (sessionId: string, pending: boolean) => void;
+  setModeRoutePending: (sessionId: string, pending: boolean) => void;
   setNewSession: (sessionId: string, isNew: boolean) => void;
   addToolCall: (
     sessionId: string,
@@ -484,7 +495,14 @@ interface ChatState {
   clearMessages: (sessionId: string) => void;
   clearCurrentTurnData: (sessionId: string, requestId?: string) => void;
   prependMessages: (sessionId: string, olderFirst: Message[]) => void;
-  addToTaskQueue: (sessionId: string, content: string, mediaItems?: MediaItem[]) => void;
+  addToTaskQueue: (
+    sessionId: string,
+    content: string,
+    mediaItems?: MediaItem[],
+    options?: { routed?: boolean },
+  ) => void;
+  /** Record that the mode router was asked about a queued prompt; false when the prompt is no longer waiting. */
+  markTaskRouted: (sessionId: string, taskId: string) => boolean;
   claimQueuedTask: (sessionId: string, taskId?: string) => TaskItem | undefined;
   claimTaskInput: (sessionId: string, taskId: string) => TaskItem | undefined;
   bindTaskInputRequest: (sessionId: string, taskId: string, requestId: string) => void;
@@ -1318,6 +1336,21 @@ export const useChatStore = create<ChatState>()(subscribeWithSelector((set, get)
     });
   },
 
+  setModeRoutePending: (sessionId, pending) => {
+    set((state) => {
+      const existing = state.runtimes[sessionId];
+      if (existing ? existing.modeRoutePending === pending : !pending) return state;
+      // The first prompt of a conversation is routed before its runtime exists.
+      const runtime = existing ?? createEmptyRuntime();
+      return {
+        runtimes: {
+          ...state.runtimes,
+          [sessionId]: { ...runtime, modeRoutePending: pending },
+        },
+      };
+    });
+  },
+
   setCanContinueQueuedSessionMessages: (sessionId, canContinue) => {
     set((state) => {
       const runtime = state.runtimes[sessionId] ?? createEmptyRuntime();
@@ -2042,7 +2075,7 @@ export const useChatStore = create<ChatState>()(subscribeWithSelector((set, get)
     });
   },
 
-  addToTaskQueue: (sessionId, content, mediaItems) => {
+  addToTaskQueue: (sessionId, content, mediaItems, options) => {
     set((state) => {
       const runtime = state.runtimes[sessionId];
       if (!runtime) return state;
@@ -2059,12 +2092,34 @@ export const useChatStore = create<ChatState>()(subscribeWithSelector((set, get)
                 timestamp: Date.now(),
                 status: 'queued',
                 ...(mediaItems && mediaItems.length > 0 ? { mediaItems } : {}),
+                ...(options?.routed ? { routed: true } : {}),
               },
             ],
           },
         },
       };
     });
+  },
+
+  markTaskRouted: (sessionId, taskId) => {
+    let marked = false;
+    set((state) => {
+      const runtime = state.runtimes[sessionId];
+      const task = runtime?.taskQueue.find((item) => item.id === taskId);
+      if (!runtime || !task || task.status !== 'queued') return state;
+      marked = true;
+      if (task.routed) return state;
+      return {
+        runtimes: {
+          ...state.runtimes,
+          [sessionId]: {
+            ...runtime,
+            taskQueue: runtime.taskQueue.map((item) => (item.id === taskId ? { ...item, routed: true } : item)),
+          },
+        },
+      };
+    });
+    return marked;
   },
 
   claimQueuedTask: (sessionId, taskId) => {
@@ -2076,6 +2131,7 @@ export const useChatStore = create<ChatState>()(subscribeWithSelector((set, get)
         runtime.isProcessing ||
         runtime.isPaused ||
         runtime.modeSwitchPending ||
+        runtime.modeRoutePending ||
         runtime.pendingQuestions.length ||
         runtime.taskQueue.some((task) => task.status === 'sending')
       )
@@ -2108,6 +2164,7 @@ export const useChatStore = create<ChatState>()(subscribeWithSelector((set, get)
         runtime.isLoadingHistory ||
         runtime.switchingMode ||
         runtime.modeSwitchPending ||
+        runtime.modeRoutePending ||
         runtime.pendingQuestions.length
       )
         return state;

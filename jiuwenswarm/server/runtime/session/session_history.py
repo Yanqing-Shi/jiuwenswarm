@@ -913,6 +913,10 @@ def _append_record_unfenced(path: Path, record: dict[str, Any]) -> None:
     from jiuwenswarm.server.runtime.session.history_replay import note_history_append
 
     note_history_append(path, record, before)
+    # The mode router's task container follows the history record by record.
+    from jiuwenswarm.server.runtime.session import mode_router_tasks
+
+    mode_router_tasks.note_history_append(path, record, before)
 
 
 def _ensure_jsonl_bootstrap(session_id: str) -> Path:

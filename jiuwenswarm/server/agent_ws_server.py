@@ -3603,6 +3603,9 @@ class AgentWebSocketServer:
             if request.req_method == ReqMethod.MODE_GET:
                 await self._handle_mode_get(ws, request, send_lock)
                 return
+            if request.req_method == ReqMethod.MODE_ROUTE:
+                await self._handle_mode_route(ws, request, send_lock)
+                return
             if request.req_method == ReqMethod.SESSION_DETACH:
                 await self._handle_session_detach(ws, request, send_lock)
                 return
@@ -6117,23 +6120,64 @@ class AgentWebSocketServer:
         self, ws: Any, request: AgentRequest, send_lock: asyncio.Lock,
     ) -> None:
         """Commit a Session's explicit execution mode."""
-        await self._answer_mode_request(ws, request, send_lock, commit=True)
+        await self._answer_mode_request(ws, request, send_lock, verb="set")
 
     async def _handle_mode_get(
         self, ws: Any, request: AgentRequest, send_lock: asyncio.Lock,
     ) -> None:
         """Read the authoritative mode after an uncertain switch."""
-        await self._answer_mode_request(ws, request, send_lock, commit=False)
+        await self._answer_mode_request(ws, request, send_lock, verb="get")
+
+    async def _handle_mode_route(
+        self, ws: Any, request: AgentRequest, send_lock: asyncio.Lock,
+    ) -> None:
+        """Ask the mode router where a prompt should run; commits nothing."""
+        await self._answer_mode_request(ws, request, send_lock, verb="route")
+
+    async def _route_session_mode(
+        self, request: AgentRequest, params: dict[str, Any], session_id: str, user_id: str,
+    ) -> dict[str, Any]:
+        """Answer one mode.route request from its validated context."""
+        from jiuwenswarm.runtime.service import SessionModeSwitchError
+
+        query = params.get("query")
+        if not isinstance(query, str) or not query.strip():
+            raise SessionModeSwitchError("query is required", code="BAD_REQUEST")
+        # A conversation that is not saved yet sends no session_id.
+        target_session_id = str(params.get("session_id") or "").strip()
+        if target_session_id and target_session_id != session_id:
+            raise SessionModeSwitchError("session_id does not match the request", code="BAD_REQUEST")
+        if target_session_id:
+            # Read the mode after earlier mode.set requests, like mode.get.
+            async with self._mode_request_lock(target_session_id):
+                context = AgentRuntime.session_mode_route_context(
+                    session_id=target_session_id,
+                    channel_id=request.channel_id,
+                    user_id=user_id,
+                )
+        else:
+            context = AgentRuntime.session_mode_route_context(
+                session_id="",
+                channel_id=request.channel_id,
+                user_id=user_id,
+                current_mode=params.get("current_mode"),
+            )
+        # The router call runs outside the lock: a slow model must not hold
+        # back a mode.set for the same Session.
+        return await AgentRuntime.route_session_mode(
+            context, query=query, request_id=str(request.request_id or ""),
+        )
 
     async def _answer_mode_request(
-        self, ws: Any, request: AgentRequest, send_lock: asyncio.Lock, *, commit: bool,
+        self, ws: Any, request: AgentRequest, send_lock: asyncio.Lock, *, verb: str,
     ) -> None:
         """Validate one mode request, run it, and send its single response."""
         from jiuwenswarm.runtime.service import SessionModeSwitchError
         from jiuwenswarm.server.runtime.session.lifecycle import LifecycleError
         from jiuwenswarm.server.runtime.session.session_metadata import MODE_SWITCH_CHANNELS
 
-        method = "mode.set" if commit else "mode.get"
+        method = f"mode.{verb}"
+        commit = verb == "set"
         params = request.params if isinstance(request.params, dict) else {}
         session_id = str(request.session_id or "").strip()
         user_id = str(request.user_id or "").strip()
@@ -6143,9 +6187,11 @@ class AgentWebSocketServer:
                     f"{method} is not available to channel {request.channel_id!r}",
                     code="BAD_REQUEST",
                 )
-            if not session_id or str(params.get("session_id") or "").strip() != session_id:
+            if verb == "route":
+                payload = await self._route_session_mode(request, params, session_id, user_id)
+            elif not session_id or str(params.get("session_id") or "").strip() != session_id:
                 raise SessionModeSwitchError("session_id is required", code="BAD_REQUEST")
-            if commit:
+            elif commit:
                 # A switch names the mode it replaces, so a client acting on a
                 # stale view gets MODE_CONFLICT instead of overwriting silently.
                 expected_mode = params.get("expected_mode")

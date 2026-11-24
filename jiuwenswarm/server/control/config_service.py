@@ -23,6 +23,7 @@ from dotenv import dotenv_values
 from jiuwenswarm.common.browser_settings import project_browser_decision
 from jiuwenswarm.common.cua_config import cua_backend_settings, is_cua_agent_enabled
 from jiuwenswarm.common.moa_config import flatten_moa_for_config_panel
+from jiuwenswarm.common.mode_router_config import mode_router_enabled
 from jiuwenswarm.common.permission_mode import canonical_permission_facade, permission_profile
 from jiuwenswarm.common.schema.agent import AgentRequest, AgentResponse
 from jiuwenswarm.common.schema.message import ReqMethod
@@ -498,6 +499,7 @@ def get_panel() -> dict[str, Any]:
         payload["team_scheduled_dispatch_enabled"] = (
             "true" if str(_nested(raw, _TEAM_DISPATCH_MODE_PATH, "autonomous")).strip() == "scheduled" else "false"
         )
+        payload["mode_router_enabled"] = _bool_text(mode_router_enabled(raw))
         payload["team_task_verification_enabled"] = _bool_text(
             _nested(raw, _TEAM_TASK_VERIFICATION_PATH, False)
         )
@@ -552,6 +554,7 @@ def get_panel() -> dict[str, Any]:
         payload.setdefault("progressive_tool_optimize", "false")
         payload.setdefault("swarmflow_enabled", "false")
         payload.setdefault("team_scheduled_dispatch_enabled", "false")
+        payload.setdefault("mode_router_enabled", "false")
         payload.setdefault("team_task_verification_enabled", "false")
         payload.setdefault("team_member_messaging_enabled", "false")
         payload.setdefault("team_member_subtasks_enabled", "false")

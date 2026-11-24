@@ -13,7 +13,7 @@ import { A2UIProvider } from '@a2ui/react';
 const frontendRoot = fileURLToPath(new URL('..', import.meta.url));
 let parseHistoryJsonFileToPreviewMessages, i18n;
 let useWebSocket, useChatStore, useSessionStore, useGoalStore, webClient, TaskQueue, ChatTimelineList, buildTimelineItems;
-let useAgentCatalogStore;
+let useAgentCatalogStore, autoRoute;
 
 before(async () => {
   const outdir = join(frontendRoot, 'node_modules/.cache/session-input');
@@ -28,6 +28,7 @@ before(async () => {
       timeline: 'src/features/chatTimeline/buildTurnTimeline.ts',
       history: 'src/features/historyRestore.ts',
       i18n: 'src/i18n/index.ts',
+      autoRoute: 'src/features/sessionMode/autoRouteState.ts',
       TaskQueue: 'queue-component',
     },
     absWorkingDir: frontendRoot,
@@ -71,6 +72,7 @@ before(async () => {
   ({ buildTimelineItems } = await load('timeline'));
   ({ parseHistoryJsonFileToPreviewMessages } = await load('history'));
   ({ default: i18n } = await load('i18n'));
+  autoRoute = await load('autoRoute');
   ({ TaskQueue, ChatTimelineList } = await load('TaskQueue'));
 });
 
@@ -2463,6 +2465,285 @@ test('team mode Stop pauses the queue instead of sending the next prompt', async
     assert.equal(c.requests().length, 0);
     assert.equal(c.runtime().taskQueue.length, 1);
     assert.ok(document.querySelector('[data-testid="chat-panel-task-queue-resume"]'), 'Resume is offered in Team mode');
+  } finally {
+    await c.dispose();
+  }
+});
+
+// ---- "auto": the mode router chooses Agent or Team before each run ----
+
+/**
+ * A mounted Session with "auto" on. `switcher` stands in for the app's
+ * `mode.set` commit: it records its calls and commits unless told otherwise.
+ */
+async function mountAutoRouted(context, { alert = false } = {}) {
+  const c = await mount(context);
+  const switcher = { calls: [], commits: true };
+  act(() => {
+    autoRoute.setModeRouterEnabled(true);
+    autoRoute.setAutoRouteSettings({ auto: true, alert });
+    autoRoute.setAutoRouteModeSwitcher(async (sessionId, currentMode, targetMode) => {
+      switcher.calls.push([sessionId, currentMode, targetMode]);
+      if (switcher.commits) useSessionStore.getState().setMode(sessionId, targetMode);
+      return switcher.commits;
+    });
+  });
+  const routes = () => c.socket.requests.filter((request) => request.method === 'mode.route');
+  return {
+    ...c,
+    switcher,
+    routes,
+    async endRun(requestId = 'original') {
+      c.receive('chat.processing_status', { is_processing: false, request_id: requestId });
+      await c.flush();
+    },
+    /** Answer the newest `mode.route` request. */
+    async answerRouter(route, extra = {}) {
+      const request = routes().at(-1);
+      await act(async () => c.socket.response(request.id, true, { payload: { route, reason: '', ...extra } }));
+      await c.flush();
+    },
+    async failRouter(code) {
+      const request = routes().at(-1);
+      await act(async () => c.socket.response(request.id, false, { code, error: code, payload: {} }));
+      await c.flush();
+    },
+    async dispose() {
+      act(() => {
+        autoRoute.setAutoRouteSettings({ auto: false, alert: true });
+        autoRoute.setModeRouterEnabled(false);
+        autoRoute.setAutoRouteModeSwitcher(null);
+      });
+      await c.dispose();
+    },
+  };
+}
+
+test('with "auto" off the queue never asks the mode router', async (context) => {
+  const c = await mount(context);
+  try {
+    act(() => autoRoute.setModeRouterEnabled(true));
+    c.queue('next prompt');
+    c.receive('chat.processing_status', { is_processing: false, request_id: 'original' });
+    await c.flush();
+    assert.equal(c.socket.requests.filter((request) => request.method === 'mode.route').length, 0);
+    assert.equal(c.requests().length, 1);
+    act(() => c.socket.response(c.requests()[0].id));
+  } finally {
+    act(() => autoRoute.setModeRouterEnabled(false));
+    await c.dispose();
+  }
+});
+
+test('with "auto" on, a queued prompt is routed only once the run before it has ended, then sent', async (context) => {
+  const c = await mountAutoRouted(context);
+  try {
+    const first = c.queue('next prompt');
+    c.queue('the one after');
+    act(() => c.api().drainTaskQueueIfIdle(c.sid));
+    assert.equal(c.routes().length, 0, 'the run is still going: its result is not there to read');
+
+    await c.endRun();
+    assert.equal(c.routes().length, 1);
+    assert.deepEqual(c.routes()[0].params, { query: 'next prompt', session_id: c.sid });
+    assert.equal(c.requests().length, 0, 'nothing is sent while the router decides');
+    assert.equal(c.runtime().modeRoutePending, true);
+    // Neither a second drain nor "send now" overtakes the prompt being routed.
+    act(() => c.api().drainTaskQueueIfIdle(c.sid));
+    let steered;
+    await act(async () => {
+      steered = await c.api().sendMessage('', c.sid, [], { queuedTaskId: first });
+    });
+    assert.equal(steered, false);
+    assert.equal(c.routes().length, 1);
+    assert.equal(c.requests().length, 0);
+
+    await c.answerRouter('agent');
+    assert.deepEqual(c.switcher.calls, [], 'the router kept the mode');
+    assert.equal(c.runtime().modeRoutePending, false);
+    assert.equal(c.requests().length, 1);
+    assert.equal(c.requests()[0].params.content, 'next prompt');
+    assert.match(String(c.requests()[0].params.mode), /^agent/);
+    assert.deepEqual(c.runtime().taskQueue.map((task) => task.content), ['the one after']);
+    assert.equal(c.routes().length, 1, 'the next prompt waits for this run before it is routed');
+    act(() => c.socket.response(c.requests()[0].id));
+
+    // That run ends: the next prompt gets its own decision.
+    c.receive('chat.processing_status', { is_processing: true, request_id: c.requests()[0].id });
+    await c.endRun(c.requests()[0].id);
+    assert.equal(c.routes().length, 2);
+    assert.deepEqual(c.routes()[1].params, { query: 'the one after', session_id: c.sid });
+    await c.answerRouter('agent');
+    assert.equal(c.requests().length, 2);
+    act(() => c.socket.response(c.requests()[1].id));
+  } finally {
+    await c.dispose();
+  }
+});
+
+test('with "auto" on and "alert" off, the router picking the other mode switches before the prompt is sent', async (context) => {
+  const c = await mountAutoRouted(context);
+  try {
+    c.queue('build a website');
+    await c.endRun();
+    await c.answerRouter('team');
+    assert.deepEqual(c.switcher.calls, [[c.sid, 'agent', 'team']]);
+    assert.equal(c.requests().length, 1);
+    assert.equal(c.requests()[0].params.content, 'build a website');
+    assert.match(String(c.requests()[0].params.mode), /^team/, 'the prompt runs in the mode the router chose');
+    assert.equal(c.runtime().modeRoutePending, false);
+    act(() => c.socket.response(c.requests()[0].id));
+  } finally {
+    await c.dispose();
+  }
+});
+
+test('with "auto" on, a routed switch that does not commit pauses the queue and keeps the prompt', async (context) => {
+  const c = await mountAutoRouted(context);
+  try {
+    c.switcher.commits = false;
+    c.queue('build a website');
+    await c.endRun();
+    await c.answerRouter('team');
+    assert.deepEqual(c.switcher.calls, [[c.sid, 'agent', 'team']]);
+    assert.equal(c.requests().length, 0, 'not sent in the old mode');
+    assert.equal(c.runtime().queuePaused, true);
+    assert.equal(c.runtime().modeRoutePending, false);
+    assert.deepEqual(c.runtime().taskQueue.map((task) => [task.content, task.status, task.routed]), [
+      ['build a website', 'queued', undefined],
+    ]);
+
+    // Resuming asks the router again.
+    c.switcher.commits = true;
+    act(() => c.store.setQueuePaused(c.sid, false));
+    act(() => c.api().drainTaskQueueIfIdle(c.sid));
+    await c.flush();
+    assert.equal(c.routes().length, 2);
+    await c.answerRouter('team');
+    assert.equal(c.requests().length, 1);
+    assert.match(String(c.requests()[0].params.mode), /^team/);
+    act(() => c.socket.response(c.requests()[0].id));
+  } finally {
+    await c.dispose();
+  }
+});
+
+for (const accepted of [true, false]) {
+  test(`with "alert" on, ${accepted ? 'Accept switches' : 'Deny keeps the mode'} and the prompt runs either way`, async (context) => {
+    const c = await mountAutoRouted(context, { alert: true });
+    try {
+      c.queue('build a website');
+      await c.endRun();
+      await c.answerRouter('team', { reason: 'needs several workers' });
+      assert.deepEqual(c.switcher.calls, [], 'nothing switches before the user answers');
+      assert.equal(c.requests().length, 0);
+      assert.equal(c.runtime().modeRoutePending, true);
+
+      await act(async () => autoRoute.answerModeRouteConfirmation(c.sid, accepted));
+      await c.flush();
+      assert.deepEqual(c.switcher.calls, accepted ? [[c.sid, 'agent', 'team']] : []);
+      assert.equal(c.requests().length, 1);
+      assert.equal(c.requests()[0].params.content, 'build a website');
+      assert.match(String(c.requests()[0].params.mode), accepted ? /^team/ : /^agent/);
+      assert.equal(c.runtime().modeRoutePending, false);
+      act(() => c.socket.response(c.requests()[0].id));
+    } finally {
+      await c.dispose();
+    }
+  });
+}
+
+test('unchecking "auto" while the pop-up is open sends the prompt in the current mode', async (context) => {
+  const c = await mountAutoRouted(context, { alert: true });
+  try {
+    c.queue('build a website');
+    await c.endRun();
+    await c.answerRouter('team');
+    assert.equal(c.requests().length, 0);
+    await act(async () => autoRoute.setAutoRouteSettings({ auto: false }));
+    await c.flush();
+    assert.deepEqual(c.switcher.calls, []);
+    assert.equal(c.requests().length, 1);
+    assert.match(String(c.requests()[0].params.mode), /^agent/);
+    act(() => c.socket.response(c.requests()[0].id));
+  } finally {
+    await c.dispose();
+  }
+});
+
+for (const code of ['ROUTER_UNAVAILABLE', 'ROUTER_BAD_ANSWER', 'BAD_REQUEST']) {
+  test(`with "auto" on, a router that gives no decision (${code}) leaves the prompt its mode`, async (context) => {
+    const c = await mountAutoRouted(context);
+    try {
+      c.queue('build a website');
+      await c.endRun();
+      await c.failRouter(code);
+      assert.deepEqual(c.switcher.calls, []);
+      assert.equal(c.requests().length, 1);
+      assert.match(String(c.requests()[0].params.mode), /^agent/);
+      assert.equal(c.runtime().modeRoutePending, false);
+      act(() => c.socket.response(c.requests()[0].id));
+    } finally {
+      await c.dispose();
+    }
+  });
+}
+
+test('with "auto" on, a prompt steered into the running turn is never routed', async (context) => {
+  const c = await mountAutoRouted(context);
+  try {
+    const task = c.queue('steer this in');
+    await c.click(task, 'send');
+    await c.flush();
+    assert.equal(c.routes().length, 0);
+    assert.equal(c.requests().length, 1);
+    assert.equal(c.requests()[0].params.content, 'steer this in');
+  } finally {
+    await c.dispose();
+  }
+});
+
+test('with "auto" on, a run that starts while the router decides makes the prompt wait and be asked again', async (context) => {
+  const c = await mountAutoRouted(context);
+  try {
+    c.queue('next prompt');
+    await c.endRun();
+    assert.equal(c.routes().length, 1);
+    // Another run starts before the answer arrives; its result is not in what the router read.
+    c.receive('chat.processing_status', { is_processing: true, request_id: 'other-run' });
+    await c.answerRouter('team');
+    assert.deepEqual(c.switcher.calls, [], 'no switch is attempted under a running turn');
+    assert.equal(c.requests().length, 0);
+    assert.equal(c.runtime().modeRoutePending, false);
+    assert.equal(c.runtime().taskQueue[0].routed, undefined);
+
+    await c.endRun('other-run');
+    assert.equal(c.routes().length, 2, 'asked again with the new result');
+    await c.answerRouter('agent');
+    assert.equal(c.requests().length, 1);
+    act(() => c.socket.response(c.requests()[0].id));
+  } finally {
+    await c.dispose();
+  }
+});
+
+test('with "auto" on, a queued prompt removed while the router decides is dropped and the next one is routed', async (context) => {
+  const c = await mountAutoRouted(context);
+  try {
+    const first = c.queue('changed my mind');
+    c.queue('do this instead');
+    await c.endRun();
+    assert.equal(c.routes()[0].params.query, 'changed my mind');
+    act(() => c.store.removeFromTaskQueue(c.sid, first));
+    await c.answerRouter('team');
+    assert.deepEqual(c.switcher.calls, [], 'a switch for a prompt that is gone is not made');
+    assert.equal(c.requests().length, 0);
+    assert.equal(c.routes().length, 2);
+    assert.equal(c.routes()[1].params.query, 'do this instead');
+    await c.answerRouter('agent');
+    assert.equal(c.requests().length, 1);
+    assert.equal(c.requests()[0].params.content, 'do this instead');
+    act(() => c.socket.response(c.requests()[0].id));
   } finally {
     await c.dispose();
   }
